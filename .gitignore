@@ -1,0 +1,8 @@
+node_modules/
+lib/
+data/
+.scratch/
+*.log
+.env
+.env.*
+*.tsbuildinfo
