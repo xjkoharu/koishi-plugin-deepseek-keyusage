@@ -25,6 +25,10 @@ function userKey(session: Session): string | null {
   return `${session.platform}:${session.userId}`
 }
 
+function looksLikeUserToken(value: string): boolean {
+  return /^[A-Za-z0-9+/=_-]{32,}$/.test(value.trim())
+}
+
 function isAdmin(session: Session, config: Config): boolean {
   const authority = (session.user as { authority?: number } | undefined)?.authority ?? 0
   return isAdminUser(session.platform, session.userId, authority, config)
@@ -151,10 +155,14 @@ export function applyCommands(
     session: Session,
     rawKey: string,
     explicitToken: string | undefined,
+    explicitName: string | undefined,
     usage: string,
     checkCooldown = true,
   ) => {
-    if (!rawKey) return `用法：${usage} 25f0 [userToken]\n25f0 换成 Key 尾号，也可以发完整 sk-... Key。`
+    if (!rawKey) return `用法：${usage} 25f0 [userToken] [备注]\n25f0 换成 Key 尾号，也可以发完整 sk-... Key。`
+    if (explicitToken && session.guildId) {
+      return '带 userToken 的绑定请私聊机器人，群聊里不要发 Token。'
+    }
     if (session.guildId && !config.allowGroupBind) {
       return '为了安全，请私聊机器人添加 Key。'
     }
@@ -174,7 +182,7 @@ export function applyCommands(
     }
 
     const key = userKey(session)!
-    const { binding, count } = await service.addBinding(key, token, rawKey)
+    const { binding, count } = await service.addBinding(key, token, rawKey, explicitName)
     const lines = [`添加成功：${binding.keyName}（${shortMask(binding.sensitiveId)}）`]
     lines.push(
       count > 1
@@ -185,9 +193,17 @@ export function applyCommands(
     return lines.join('\n')
   }
 
-  const setToken = async (session: Session, rawToken?: string) => {
+  const setToken = async (session: Session, rawToken?: string, rawName?: string) => {
     if (session.guildId) return '为了安全，请私聊机器人设置 Token。'
-    let token = rawToken?.trim()
+    let token: string | undefined
+    let name = rawName?.trim()
+    if (rawToken) {
+      if (looksLikeUserToken(rawToken)) {
+        token = rawToken.trim()
+      } else {
+        name = rawToken.trim()
+      }
+    }
     if (!token) {
       const scanned = await scanBrowserTokens({
         validate: async (candidate) => {
@@ -205,8 +221,8 @@ export function applyCommands(
       return '没有从本机浏览器找到可用的平台 Token。'
     }
     await service.verifyToken(token)
-    await service.setDefaultToken(userKey(session)!, token)
-    return `账号已保存：${maskToken(token)}\n现在可以发 dsu.add 25f0 绑定这个账号下的 Key。`
+    await service.setDefaultToken(userKey(session)!, token, name)
+    return `账号已保存：${maskToken(token)}${name ? `（${name}）` : ''}\n现在可以发 dsu.add 25f0 绑定这个账号下的 Key。`
   }
 
   const main = ctx
@@ -240,16 +256,22 @@ export function applyCommands(
         if (spaced) {
           const rest = spaced[2].trim()
           const verb = spaced[1].toLowerCase()
-          if (verb === 'token') return setToken(session, rest)
-          const [rawKey, token] = rest.split(/\s+/, 2)
-          if (!rawKey) return `用法：dsu.${verb} 25f0 [userToken]`
-          return bindKey(session, rawKey, token, `dsu.${verb}`, false)
+          if (verb === 'token') {
+            const [token, name] = rest.split(/\s+/, 2)
+            return setToken(session, token, name)
+          }
+          const parts = rest.split(/\s+/)
+          const rawKey = parts[0]
+          const token = parts[1]
+          const name = parts[2]
+          if (!rawKey) return `用法：dsu.${verb} 25f0 [userToken] [备注]`
+          return bindKey(session, rawKey, token, name, `dsu.${verb}`, false)
         }
 
         const bindings = await service.bindings(key)
         if (!bindings.length) return UNBOUND_MESSAGE
 
-        const labels = service.labels(bindings)
+        const labels = await service.labelsForUser(key, bindings)
         if (!query) {
           const reports = await service.reportsForUser(key)
           return showReports(session, reports.map((item) => item.report))
@@ -283,13 +305,17 @@ export function applyCommands(
   }
 
   ctx
-    .command('dsu.token [token:string]', '设置当前账号的 userToken')
-    .usage('不填 token 时扫描 bot 所在电脑的 Edge/Chrome；也可以直接粘贴 userToken。')
-    .example('dsu.token')
-    .example('dsu.token 你的userToken')
+    .command('dsu.token [token:string] [name:string]', '设置当前账号的 userToken')
+    .usage('格式：dsu.token <userToken> <备注>；只发备注时读取 bot 本机浏览器。')
+    .example('dsu.token 主号')
+    .example('dsu.token 你的userToken 主号')
     .action(
       guard(async (session, argv) => {
-        return setToken(session, String(argv.args?.[0] ?? '').trim())
+        return setToken(
+          session,
+          String(argv.args?.[0] ?? '').trim(),
+          String(argv.args?.[1] ?? '').trim() || undefined,
+        )
       }),
     )
 
@@ -297,21 +323,53 @@ export function applyCommands(
     guard(async (session, argv) => {
       const rawKey = String(argv.args?.[0] ?? '').trim()
       const token = String(argv.args?.[1] ?? '').trim() || undefined
-      return bindKey(session, rawKey, token, usage)
+      const name = String(argv.args?.[2] ?? '').trim() || undefined
+      return bindKey(session, rawKey, token, name, usage)
     })
 
   ctx
-    .command('dsu.add <key:string> [token:string]', '添加一个 DeepSeek API Key')
-    .usage('key 可以是完整 Key 或 Key 尾号；token 不填时用当前账号。')
+    .command('dsu.add <key:string> [token:string] [name:string]', '添加一个 DeepSeek API Key')
+    .usage('key 可以是完整 Key 或 Key 尾号；新账号必须带备注。')
     .example('dsu.add 25f0')
-    .example('dsu.add 25f0 你的userToken')
+    .example('dsu.add 25f0 你的userToken 朋友的号')
     .action(addHandler('dsu.add'))
 
   ctx
-    .command('dsu.bind <key:string> [token:string]', '添加一个 DeepSeek API Key（旧指令）')
+    .command('dsu.bind <key:string> [token:string] [name:string]', '添加一个 DeepSeek API Key（旧指令）')
     .usage('等同 dsu.add。')
     .example('dsu.bind 25f0')
     .action(addHandler('dsu.add'))
+
+  ctx
+    .command('dsu.account <action:string> [query:string] [name:string]', '管理账号备注')
+    .usage('dsu.account list；dsu.account rename <账号/备注> <新备注>。')
+    .example('dsu.account list')
+    .example('dsu.account rename 账号1 主号')
+    .action(
+      guard(async (session, argv) => {
+        const action = String(argv.args?.[0] ?? '').trim().toLowerCase()
+        const key = userKey(session)!
+        if (action === 'list') {
+          const accounts = await service.accounts(key)
+          if (!accounts.length) return '你还没有添加账号。先发 dsu.token 主号。'
+          const bindings = await service.bindings(key)
+          const lines = ['账号列表：']
+          for (const account of accounts) {
+            const count = bindings.filter((item) => item.token === account.token).length
+            lines.push(`- ${account.name}：${maskToken(account.token)} · ${count} 个 Key`)
+          }
+          return lines.join('\n')
+        }
+        if (action === 'rename') {
+          const query = String(argv.args?.[1] ?? '').trim()
+          const name = String(argv.args?.[2] ?? '').trim()
+          if (!query || !name) return '用法：dsu.account rename <账号/备注> <新备注>'
+          const account = await service.renameAccount(key, query, name)
+          return `账号备注已改为：${account.name}`
+        }
+        return '用法：dsu.account list 或 dsu.account rename <账号/备注> <新备注>'
+      }),
+    )
 
   ctx
     .command('dsu.remove <query:string>', '移除自己绑定的某个 Key')

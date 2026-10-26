@@ -140,6 +140,7 @@ describe('plugin integration', () => {
   let baseDir: string
   let requests: ReturnType<typeof createServer>['requests']
   let client: { receive(content: string): Promise<string[]> }
+  let privateClient: { receive(content: string): Promise<string[]> }
   let admin: { receive(content: string): Promise<string[]> }
 
   beforeAll(async () => {
@@ -157,7 +158,7 @@ describe('plugin integration', () => {
     app.plugin(mock, {})
     app.plugin(memory, {})
     app.plugin(plugin as any, {
-      userToken: 'test-token',
+      userToken: 'test-token-1-0123456789abcdef0123456789',
       apiBaseUrl: base,
       officialBaseUrl: base,
       cacheTtl: 0,
@@ -170,6 +171,7 @@ describe('plugin integration', () => {
     await app.start()
     const mockContext = (app as any).mock
     client = mockContext.client(USER_ID, 'channel-1')
+    privateClient = mockContext.client(USER_ID)
     admin = mockContext.client(ADMIN_ID, 'channel-2')
   }, 30000)
 
@@ -190,12 +192,12 @@ describe('plugin integration', () => {
   })
 
   it('rejects a key that is not in the account', async () => {
-    const replies = await client.receive('dsu.add sk-00000aaaaaaaaaaaaaaaaaa0000')
+    const replies = await privateClient.receive('dsu.add sk-00000aaaaaaaaaaaaaaaaaa0000 test-token-1-0123456789abcdef0123456789 主号')
     expect(replies.join('\n')).toContain('没有在这个账号里找到')
   })
 
   it('adds a key and never stores the full key', async () => {
-    const replies = await client.receive(`dsu.add ${FULL_KEY}`)
+    const replies = await privateClient.receive(`dsu.add ${FULL_KEY} test-token-1-0123456789abcdef0123456789 主号`)
     expect(replies.join('\n')).toContain('添加成功：示例A')
     const stored = JSON.stringify(await (app as any).database.get(BINDING_TABLE, {}))
     expect(stored).not.toContain(FULL_KEY)
@@ -203,7 +205,7 @@ describe('plugin integration', () => {
   })
 
   it('adds a second key for the same user', async () => {
-    const replies = await client.receive(`dsu.add ${FULL_KEY2}`)
+    const replies = await privateClient.receive(`dsu.add ${FULL_KEY2} test-token-1-0123456789abcdef0123456789 主号`)
     const text = replies.join('\n')
     expect(text).toContain('添加成功：示例B')
     expect(text).toContain('2 个 Key')
@@ -240,7 +242,7 @@ describe('plugin integration', () => {
   it('sends the platform token to the usage endpoints', async () => {
     const usageRequests = requests.filter((item) => item.pathname === '/api/v0/usage/by_api_key/amount')
     const forKeyOne = usageRequests.find((item) => item.query.getAll('api_key_tracking_id').includes('tk_1'))
-    expect(forKeyOne?.authorization).toBe('Bearer test-token')
+    expect(forKeyOne?.authorization).toBe('Bearer test-token-1-0123456789abcdef0123456789')
     expect(forKeyOne?.query.get('tz')).toBe(String(TZ))
   })
 
@@ -266,18 +268,34 @@ describe('plugin integration', () => {
     expect(text).toContain(`用户 ID：${USER_ID}`)
     expect(text).toContain('管理员：否')
     expect(text).toContain('绑定：2 个 Key · 1 个账号')
+    expect(text).toContain('默认账号：')
+  })
+
+  it('requires a remark when binding a new account', async () => {
+    const third = (app as any).mock.client('user-4')
+    const text = (await third.receive('dsu.add 1234 test-token-4-0123456789abcdef0123456789')).join('\n')
+    expect(text).toContain('第一次绑定这个账号，请加一个备注')
   })
 
   it('binds a second account for the same user', async () => {
-    const text = (await client.receive('dsu.add 1234 test-token-2')).join('\n')
+    const text = (await privateClient.receive('dsu.add 1234 test-token-1-0123456789abcdef0123456789-2-0123456789abcdef0123456789 朋友的号')).join('\n')
     expect(text).toContain('添加成功：示例A')
     expect(text).toContain('3 个 Key')
     const all = (await client.receive('dsu')).join('\n')
-    expect(all).toContain('账号：账号1')
-    expect(all).toContain('账号：账号2')
-    const second = (await client.receive('dsu 账号2')).join('\n')
-    expect(second).toContain('账号：账号2')
+    expect(all).toContain('账号：主号')
+    expect(all).toContain('账号：朋友的号')
+    const second = (await client.receive('dsu 朋友的号')).join('\n')
+    expect(second).toContain('账号：朋友的号')
     expect(second).toContain('API-1：sk-abcde**1234')
+  })
+
+  it('lists and renames account remarks', async () => {
+    const list = (await client.receive('dsu.account list')).join('\n')
+    expect(list).toContain('主号')
+    expect(list).toContain('朋友的号')
+    const renamed = (await client.receive('dsu.account rename 朋友的号 备用号')).join('\n')
+    expect(renamed).toContain('备用号')
+    expect((await client.receive('dsu 备用号')).join('\n')).toContain('账号：备用号')
   })
 
   it('removes one key and then all remaining keys', async () => {
@@ -285,14 +303,21 @@ describe('plugin integration', () => {
     const text = (await client.receive('dsu')).join('\n')
     expect(text).toContain('API-1：sk-abcde**1234')
     expect(text).not.toContain('名称：示例B')
-    expect(text).toContain('账号：账号2')
+    expect(text).toContain('账号：备用号')
     expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 2 个 Key')
     expect((await client.receive('dsu')).join('\n')).toContain('你还没有绑定 API Key')
   })
 
+  it('sets a default token via chat and binds a key with it', async () => {
+    const saved = (await privateClient.receive('dsu.token test-token-1-0123456789abcdef0123456789-3-0123456789abcdef0123456789 小号')).join('\n')
+    expect(saved).toContain('账号已保存')
+    const bound = (await privateClient.receive('dsu.add 5678')).join('\n')
+    expect(bound).toContain('添加成功：示例B')
+  })
+
   it('binds by key suffix using the spaced dsu add syntax', async () => {
-    const second = (app as any).mock.client('user-2', 'channel-3')
-    const text = (await second.receive('dsu add 9012')).join('\n')
+    const second = (app as any).mock.client('user-2')
+    const text = (await second.receive('dsu add 9012 test-token-1-0123456789abcdef0123456789 主号')).join('\n')
     expect(text).toContain('添加成功：示例C')
     expect(text).toContain('sk-klmno**9012')
   })

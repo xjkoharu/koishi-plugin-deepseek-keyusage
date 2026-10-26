@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Context } from 'koishi'
 import { Config } from './config'
-import { AccountService, BINDING_TABLE, USER_TABLE } from './account-service'
+import { AccountService, ACCOUNT_TABLE, BINDING_TABLE, USER_TABLE } from './account-service'
 import { OfficialClient } from './api/official'
 import { applyCommands } from './commands'
 import { BindingStore } from './store'
@@ -17,10 +17,11 @@ export const usage = `
 
 **多账号**：每个平台账号（userToken）可以绑定多个 Key；一个人也可以绑定多个账号下的 Key。
 
-第一次使用：私聊机器人发 \`dsu.token\` 设置当前账号（不填 token 会读取 bot 所在电脑的浏览器），然后发 \`dsu.add 25f0\` 绑定 Key。
-也可以直接发 \`dsu.add 25f0 你的userToken\` 绑定另一个账号；\`dsu add 25f0\` 是同样的空格写法。
+第一次使用：私聊机器人发 \`dsu.token 主号\` 设置当前账号（不填 token 会读取 bot 所在电脑的浏览器；新账号必须带备注），然后发 \`dsu.add 25f0\` 绑定 Key。
+也可以直接发 \`dsu.add 25f0 你的userToken 朋友的号\` 绑定另一个账号；\`dsu add 25f0\` 是同样的空格写法。
 
 管理员：\`dsu.all [页码]\` 跨所有账号分页查看，\`dsu.key <名字>\` 查任意 Key。
+账号备注可以用 \`dsu.account list\` 查看，\`dsu.account rename 账号1 主号\` 修改。
 
 注意：userToken 等同于账号登录态，不要外传。
 `
@@ -99,6 +100,18 @@ function defineModels(ctx: Context): void {
     },
     { primary: 'userId' },
   )
+  ctx.model.extend(
+    ACCOUNT_TABLE,
+    {
+      id: 'string',
+      userId: 'string',
+      token: 'string',
+      name: 'string',
+      createdAt: 'unsigned',
+      updatedAt: 'unsigned',
+    },
+    { primary: 'id' },
+  )
 }
 
 export function apply(ctx: Context, config: Config) {
@@ -129,7 +142,6 @@ export function apply(ctx: Context, config: Config) {
     ctx,
     config,
     verifier,
-    fallbackToken: () => tokens.getToken().then((token) => token || undefined),
     logger,
     debug,
   })
@@ -138,6 +150,14 @@ export function apply(ctx: Context, config: Config) {
   void tokens.getToken().catch((error) => logger.warn(error))
 
   // 旧版是「全局 token + JSON 绑定」；升级后自动迁移成带 token 的绑定。
+  ctx.on('ready', async () => {
+    try {
+      await service.ensureLegacyAccounts()
+    } catch (error) {
+      logger.warn?.(`补全旧账号备注失败：${(error as Error).message}`)
+    }
+  })
+
   ctx.on('ready', async () => {
     try {
       const existing = await ctx.database.get(BINDING_TABLE, {})
@@ -167,7 +187,7 @@ export function apply(ctx: Context, config: Config) {
             boundAt: binding.boundAt || Date.now(),
           })
         }
-        await service.setDefaultToken(userId, token)
+        await service.setDefaultToken(userId, token, '账号1')
       }
       await fs.rename(file, `${file}.migrated`).catch(() => undefined)
       logger.info(`已迁移 ${entries.length} 个用户的旧绑定`)

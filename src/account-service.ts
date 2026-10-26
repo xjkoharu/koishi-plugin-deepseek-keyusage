@@ -23,6 +23,7 @@ import { DAY_SECONDS, localDayIndex, startOfLocalDay, tzOffsetSeconds } from './
 
 export const BINDING_TABLE = 'deepseek_keyusage_binding'
 export const USER_TABLE = 'deepseek_keyusage_user'
+export const ACCOUNT_TABLE = 'deepseek_keyusage_account'
 
 const CHUNK_SECONDS = 31 * DAY_SECONDS
 
@@ -42,10 +43,20 @@ export interface StoredUser {
   updatedAt: number
 }
 
+export interface StoredAccount {
+  id: string
+  userId: string
+  token: string
+  name: string
+  createdAt: number
+  updatedAt: number
+}
+
 declare module 'koishi' {
   interface Tables {
     deepseek_keyusage_binding: StoredBinding
     deepseek_keyusage_user: StoredUser
+    deepseek_keyusage_account: StoredAccount
   }
 }
 
@@ -85,7 +96,6 @@ export interface AccountServiceOptions {
   ctx: Context
   config: Config
   verifier: OfficialClient
-  fallbackToken: () => Promise<string | undefined>
   logger?: LoggerLike
   debug?: (message: string, detail?: unknown) => void
 }
@@ -156,13 +166,72 @@ export class AccountService {
     return this.memo(`summary:${token}`, () => this.client(token).getSummary(), force)
   }
 
-  /** 当前用户保存的默认 token；没有就回退到配置/环境变量里的全局 token。 */
+  /** 当前用户保存的默认 token。 */
   async defaultToken(userId: string): Promise<string | undefined> {
     const rows: any[] = await this.db.get(USER_TABLE, { userId })
-    return rows[0]?.token || (await this.options.fallbackToken())
+    return rows[0]?.token
   }
 
-  async setDefaultToken(userId: string, token: string): Promise<void> {
+  async accounts(userId: string): Promise<StoredAccount[]> {
+    const rows: any[] = await this.db.get(ACCOUNT_TABLE, { userId })
+    return rows.sort((a, b) => a.createdAt - b.createdAt) as StoredAccount[]
+  }
+
+  /** 新账号必须带备注；已有账号直接复用。 */
+  async ensureAccount(userId: string, token: string, name?: string): Promise<StoredAccount> {
+    const accountToken = token.trim()
+    const rows: any[] = await this.db.get(ACCOUNT_TABLE, { userId, token: accountToken })
+    if (rows[0]) {
+      if (name?.trim() && rows[0].name !== name.trim()) {
+        await this.db.set(ACCOUNT_TABLE, { id: rows[0].id }, { name: name.trim(), updatedAt: Date.now() })
+        return { ...rows[0], name: name.trim() }
+      }
+      return rows[0] as StoredAccount
+    }
+
+    const label = name?.trim()
+    if (!label) {
+      throw new BindError(
+        '第一次绑定这个账号，请加一个备注：dsu.token <userToken> 主号\n或者 dsu.add 25f0 <userToken> 主号。',
+      )
+    }
+    const sameName: any[] = await this.db.get(ACCOUNT_TABLE, { userId, name: label })
+    if (sameName.length) {
+      throw new BindError(`备注「${label}」已经被另一个账号用了，换一个。`)
+    }
+    const now = Date.now()
+    const account: StoredAccount = {
+      id: randomUUID(),
+      userId,
+      token: accountToken,
+      name: label,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await this.db.create(ACCOUNT_TABLE, account)
+    return account
+  }
+
+  async renameAccount(userId: string, query: string, name: string): Promise<StoredAccount> {
+    const label = name.trim()
+    if (!label) throw new BindError('备注不能为空。')
+    const bindings = await this.bindings(userId)
+    const labels = await this.labelsForUser(userId, bindings)
+    const target = [...labels.entries()].find(([, value]) => value.toLowerCase() === query.trim().toLowerCase())
+    if (!target) throw new BindError(`没有找到账号「${query}」。`)
+    const token = target[0]
+    const account = await this.ensureAccount(userId, token)
+    const sameName: any[] = await this.db.get(ACCOUNT_TABLE, { userId, name: label })
+    if (sameName.length && sameName[0].id !== account.id) {
+      throw new BindError(`备注「${label}」已经被另一个账号用了，换一个。`)
+    }
+    const updated = { ...account, name: label, updatedAt: Date.now() }
+    await this.db.set(ACCOUNT_TABLE, { id: account.id }, { name: label, updatedAt: updated.updatedAt })
+    return updated
+  }
+
+  async setDefaultToken(userId: string, token: string, name?: string): Promise<void> {
+    await this.ensureAccount(userId, token, name)
     const rows: any[] = await this.db.get(USER_TABLE, { userId })
     const now = Date.now()
     if (rows.length) {
@@ -181,12 +250,14 @@ export class AccountService {
     userId: string,
     token: string,
     rawKey: string,
+    name?: string,
   ): Promise<{ binding: StoredBinding; count: number }> {
     const accountToken = token.trim()
     const current = await this.bindings(userId)
     if (current.length >= this.config.maxBindings) {
       throw new BindError(`最多只能绑定 ${this.config.maxBindings} 个 Key，先用 dsu.remove 删掉一个。`)
     }
+    await this.ensureAccount(userId, accountToken, name)
 
     let keys = await this.keys(accountToken)
     const candidate = rawKey.trim()
@@ -265,17 +336,68 @@ export class AccountService {
   async clear(userId: string): Promise<number> {
     const rows = await this.bindings(userId)
     if (rows.length) await this.db.remove(BINDING_TABLE, { userId })
+    await this.db.remove(ACCOUNT_TABLE, { userId })
     await this.db.remove(USER_TABLE, { userId })
     return rows.length
   }
 
-  /** 按 token 顺序生成「账号1、账号2」，同一个 token 的 Key 共用一个编号。 */
-  labels(bindings: StoredBinding[]): Map<string, string> {
+  /** 用户视角：优先用备注，没有备注的旧账号退回「账号N」。 */
+  async labelsForUser(userId: string, bindings: StoredBinding[]): Promise<Map<string, string>> {
+    const accounts = await this.accounts(userId)
+    const names = new Map(accounts.map((account) => [account.token, account.name]))
     const map = new Map<string, string>()
     for (const binding of bindings) {
-      if (!map.has(binding.token)) map.set(binding.token, `账号${map.size + 1}`)
+      if (!map.has(binding.token)) {
+        map.set(binding.token, names.get(binding.token) || `账号${map.size + 1}`)
+      }
     }
     return map
+  }
+
+  /** 管理员视角：跨用户按 token 去重，优先用任意一个备注。 */
+  async labelsAll(bindings: StoredBinding[]): Promise<Map<string, string>> {
+    const accounts = (await this.db.get(ACCOUNT_TABLE, {})) as StoredAccount[]
+    const names = new Map<string, string>()
+    for (const account of accounts) {
+      if (!names.has(account.token)) names.set(account.token, account.name)
+    }
+    const map = new Map<string, string>()
+    for (const binding of bindings) {
+      if (!map.has(binding.token)) {
+        map.set(binding.token, names.get(binding.token) || `账号${map.size + 1}`)
+      }
+    }
+    return map
+  }
+
+  /** 老版本没有账号表，按绑定补一个默认备注。 */
+  async ensureLegacyAccounts(): Promise<void> {
+    const bindings = (await this.db.get(BINDING_TABLE, {})) as StoredBinding[]
+    bindings.sort((a, b) => a.boundAt - b.boundAt)
+    const byUser = new Map<string, StoredBinding[]>()
+    for (const binding of bindings) {
+      const list = byUser.get(binding.userId) ?? []
+      list.push(binding)
+      byUser.set(binding.userId, list)
+    }
+    for (const [userId, list] of byUser) {
+      const accounts = await this.accounts(userId)
+      const existing = new Set(accounts.map((account) => account.token))
+      let index = accounts.length
+      for (const binding of list) {
+        if (existing.has(binding.token)) continue
+        existing.add(binding.token)
+        index += 1
+        await this.db.create(ACCOUNT_TABLE, {
+          id: randomUUID(),
+          userId,
+          token: binding.token,
+          name: `账号${index}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      }
+    }
   }
 
   async reportKey(token: string, key: ApiKeyInfo, label?: string): Promise<Report> {
@@ -333,7 +455,7 @@ export class AccountService {
 
   async reportsForUser(userId: string): Promise<UserReport[]> {
     const bindings = await this.bindings(userId)
-    const labels = this.labels(bindings)
+    const labels = await this.labelsForUser(userId, bindings)
     return Promise.all(
       bindings.map(async (binding) => ({
         binding,
@@ -406,7 +528,7 @@ export class AccountService {
   async allPage(page = 1): Promise<AllPage> {
     const bindings = (await this.db.get(BINDING_TABLE, {})) as StoredBinding[]
     bindings.sort((a, b) => a.boundAt - b.boundAt)
-    const labels = this.labels(bindings)
+    const labels = await this.labelsAll(bindings)
     const tokens = [...labels.keys()]
 
     const accounts = await Promise.all(
@@ -457,7 +579,7 @@ export class AccountService {
   async findKeys(query: string): Promise<Array<{ key: ApiKeyInfo; token: string; label: string; binding?: StoredBinding }>> {
     const bindings = (await this.db.get(BINDING_TABLE, {})) as StoredBinding[]
     bindings.sort((a, b) => a.boundAt - b.boundAt)
-    const labels = this.labels(bindings)
+    const labels = await this.labelsAll(bindings)
     const q = query.trim().toLowerCase()
     if (!q) return []
     const result: Array<{ key: ApiKeyInfo; token: string; label: string; binding?: StoredBinding }> = []

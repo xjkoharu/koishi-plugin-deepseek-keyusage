@@ -38,18 +38,19 @@
 ## 多账号怎么用
 
 ```text
-dsu.token                       # 读取 bot 本机浏览器，保存为当前账号
-dsu.token 你的userToken          # 或者直接粘贴另一个账号的 token
-dsu.add 25f0                    # 在当前账号里按尾号绑定 Key
-dsu.add 25f0 另一个userToken     # 直接绑到另一个账号
+dsu.token 主号                   # 读取 bot 本机浏览器，保存为「主号」
+dsu.token 你的userToken 朋友的号  # 直接粘贴另一个账号的 token，并加备注
+dsu.add 25f0                    # 在「主号」里按尾号绑定 Key
+dsu.add 25f0 另一个userToken 备用号  # 直接绑到另一个账号，新账号必须带备注
 dsu                             # 列出所有账号下的 Key
-dsu 账号2                       # 只看账号2
-dsu.list                        # 只看绑定列表
+dsu 备用号                      # 只看「备用号」这个账号
+dsu.account list                # 查看账号备注
+dsu.account rename 账号1 主号    # 给旧账号改备注
 ```
 
-同一个账号下的多个 Key 共用余额；不同账号的余额分开显示。账号编号（账号1、账号2）按绑定顺序自动生成。
+同一个账号下的多个 Key 共用余额；不同账号的余额分开显示。新账号必须带备注，避免出现一堆分不清的「账号1、账号2」；旧数据会自动补成「账号N」，可以再用 `dsu.account rename` 改。
 
-> `dsu.token` 的「一键读取」只能读 **bot 跑的那台电脑** 的 Edge/Chrome。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token`。
+> `dsu.token` 的「一键读取」只能读 **bot 跑的那台电脑** 的 Edge/Chrome。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token 他的备注`。
 
 ## 工作原理（先看这段）
 
@@ -103,8 +104,8 @@ plugins:
 多账号版推荐直接用聊天命令：
 
 ```text
-dsu.token                  # 读取 bot 所在电脑的 Edge/Chrome
-dsu.token 你的userToken     # 或者直接粘贴
+dsu.token 主号                  # 读取 bot 所在电脑的 Edge/Chrome，并加备注
+dsu.token 你的userToken 主号     # 或者直接粘贴 token 和备注
 ```
 
 Token 会保存到这个用户的默认账号，之后 `dsu.add 25f0` 就用它。绑定关系和多账号 Token 都存在 Koishi 数据库里，不会写回 `koishi.yml`，也不会在聊天里显示原文。
@@ -117,11 +118,11 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add 25f0` 就用它�
 
 **手动获取**：登录 [platform.deepseek.com](https://platform.deepseek.com) → `F12` → `Application` → `Local Storage` → `https://platform.deepseek.com` → 复制 `userToken` 的值。
 
-> `dsu.token` 的浏览器读取只能读 **bot 跑的那台电脑**。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token`。
+> `dsu.token` 的浏览器读取只能读 **bot 跑的那台电脑**。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token 他的备注`。
 >
 > `userToken` 等同于账号登录态。不要发到公开渠道，也不要提交到公开仓库。
 
-**默认 Token 的解析顺序**：当前用户数据库里保存的默认账号 → 插件配置的 `userToken` → 环境变量 `DEEPSEEK_PLATFORM_TOKEN` → 本地缓存文件。
+**默认 Token**：每个用户在数据库里保存的默认账号。插件配置里的 `userToken` 只用于旧数据迁移和控制台一键读取，不会自动给所有用户使用。
 
 ## 配置
 
@@ -129,7 +130,7 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add 25f0` 就用它�
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `userToken` | 空 | 后备的全局平台 Token；聊天里用 `dsu.token` 设置的账号优先 |
+| `userToken` | 空 | 旧版全局 Token，仅用于迁移；新绑定请用 `dsu.token` |
 | `autoReadToken` | `true` | 没有 Token 时自动从本机 Edge / Chrome 读取（只查找 `platform.deepseek.com`，不校验通过不会使用） |
 | `apiBaseUrl` | `https://platform.deepseek.com` | 平台接口地址 |
 | `officialBaseUrl` | `https://api.deepseek.com` | 官方接口，用于校验完整 Key；只发尾号时不需要 |
@@ -162,12 +163,14 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add 25f0` 就用它�
 | 指令 | 说明 | 权限 |
 | --- | --- | --- |
 | `dsu` | 列出自己绑定的所有账号 / Key 的完整用量 | 已绑定用户 |
-| `dsu 账号1` | 只看某个账号下的 Key | 已绑定用户 |
+| `dsu 账号1` | 只看某个账号下的 Key（也可以用备注，如 `dsu 主号`） | 已绑定用户 |
 | `dsu <序号/名字>` | 只看指定的那个 Key | 已绑定用户 |
-| `dsu.token [userToken]` | 设置当前账号；不填 token 时读取 bot 本机浏览器 | 所有人 |
-| `dsu.add <Key尾号> [userToken]` | 用 Key 尾号绑定；不填 token 时用当前账号 | 所有人 |
-| `dsu.add sk-xxx [userToken]` | 用完整 Key 绑定 | 所有人 |
+| `dsu.token [userToken] <备注>` | 设置账号；不填 token 时读取 bot 本机浏览器。新账号必须带备注 | 所有人 |
+| `dsu.add <Key尾号> [userToken] [备注]` | 用 Key 尾号绑定；新账号必须带备注 | 所有人 |
+| `dsu.add sk-xxx [userToken] [备注]` | 用完整 Key 绑定 | 所有人 |
 | `dsu add <Key尾号>` | 空格写法，等同 `dsu.add <Key尾号>` | 所有人 |
+| `dsu.account list` | 查看账号备注和 Key 数量 | 所有人 |
+| `dsu.account rename <账号/备注> <新备注>` | 修改账号备注 | 所有人 |
 | `dsu.remove <序号/名字>` | 移除某个 Key | 所有人 |
 | `dsu.list` | 列出自己绑定的 Key | 所有人 |
 | `dsu.unbind` | 解绑全部 Key 和默认账号 | 所有人 |
