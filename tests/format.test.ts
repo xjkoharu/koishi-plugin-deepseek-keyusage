@@ -5,9 +5,22 @@ import {
   formatMoney,
   formatPercent,
   looksLikeApiKey,
+  looksLikeKeySuffix,
   maskKey,
   matchesMaskedKey,
 } from '../src/utils/format'
+
+describe('looksLikeKeySuffix', () => {
+  it('accepts a short key suffix', () => {
+    expect(looksLikeKeySuffix('25f0')).toBe(true)
+    expect(looksLikeKeySuffix('abcd1234')).toBe(true)
+  })
+
+  it('rejects full keys and too-short values', () => {
+    expect(looksLikeKeySuffix('sk-abcde0123456789abcdef1234')).toBe(false)
+    expect(looksLikeKeySuffix('25f')).toBe(false)
+  })
+})
 
 describe('maskKey', () => {
   it('masks a full key into platform style', () => {

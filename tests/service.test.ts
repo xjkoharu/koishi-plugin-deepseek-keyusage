@@ -137,6 +137,15 @@ describe('UsageService', () => {
     expect(JSON.stringify(stored)).not.toContain(FULL_KEY)
   })
 
+  it('binds by key suffix without asking for the full key', async () => {
+    const { binding } = await service.addBinding('1234', 'qq:user-1')
+    expect(binding).toMatchObject({
+      trackingId: 'tk_1',
+      sensitiveId: 'sk-abcde**1234',
+    })
+    expect(JSON.stringify(await service.getBindings('qq:user-1'))).not.toContain(FULL_KEY)
+  })
+
   it('rejects a key that does not belong to the account', async () => {
     await expect(service.addBinding('sk-00000aaaaaaaaaaaaaaaaaa0000', 'qq:user-1')).rejects.toBeInstanceOf(BindError)
   })

@@ -26,7 +26,8 @@
 ## 功能
 
 - `dsu`：查自己的余额、累计/今日花费、Token 明细和缓存命中率
-- 一个用户可以绑定多个 Key：`dsu.add sk-...`，`dsu` 会一次列出所有 Key 的完整用量
+- 管理员发 `dsu` 时，默认先显示账户总用量（余额、累计花费、累计/今日 Token），再显示自己绑定的 Key
+- 一个用户可以绑定多个 Key：`dsu.add 25f0`（Key 尾号）或 `dsu.add sk-...`，`dsu` 会一次列出所有 Key 的完整用量
 - `dsu.all`（管理员）：所有 Key 的今日/累计花费、Token、命中率，以及账户总花费
 - `dsu.key <名字>`（管理员）：按名字 / Key ID / 脱敏后缀查任意一个 Key
 - 支持 `adapter-qq`（`qq` / `qqguild`）与 `adapter-onebot`，渲染层可扩展
@@ -148,7 +149,9 @@ Token 输入框保持留空也能正常用（会读取缓存文件）。
 | --- | --- | --- |
 | `dsu` | 列出自己绑定的所有 Key 的完整用量 | 已添加用户 |
 | `dsu <序号/名字>` | 只看指定的那个 Key | 已添加用户 |
-| `dsu.add sk-xxx` | 添加一个 Key（建议私聊；可加多个） | 所有人 |
+| `dsu.add <尾号>` | 用 Key 尾号（如 `25f0`）添加，避免在聊天里发完整 Key | 所有人 |
+| `dsu add <尾号>` | 空格写法，等同 `dsu.add <尾号>` | 所有人 |
+| `dsu.add sk-xxx` | 用完整 Key 添加（也可以只发尾号） | 所有人 |
 | `dsu.remove <序号/名字>` | 移除某个 Key | 所有人 |
 | `dsu.list` | 列出自己绑定的 Key | 所有人 |
 | `dsu.unbind` | 解绑全部 Key | 所有人 |
@@ -199,7 +202,7 @@ registerRenderer('telegram', {
 
 ## 安全说明
 
-- 添加 Key 只保存 `tracking_id`、名称和脱敏 Key（`sk-xxxxx**abcd`），完整 Key 只用于一次校验，随后丢弃
+- 添加 Key 只保存 `tracking_id`、名称和脱敏 Key（`sk-xxxxx**abcd`）；可以只发尾号（如 `25f0`），完整 Key 只用于一次校验（如果发的是完整 Key），随后丢弃
 - 添加时会调用一次官方余额接口确认 Key 有效（401 会被拒绝）
 - 同一个 Key 不能被重复添加，避免重复占用
 - 建议 `allowGroupBind: false`，只允许私聊添加；群里添加后提醒撤回消息
@@ -244,7 +247,7 @@ src/
 tests/            单元测试 + 集成测试
 ```
 
-> 自动读取依赖 `classic-level`（LevelDB 读取器，安装依赖时会一起装上）。如果安装环境拿不到原生模块，插件会退回字符串扫描，仍可手动填 Token。
+> 自动读取使用内置的纯 JS LevelDB 读取器，不依赖原生模块；读取失败仍可手动填 Token。
 
 ## 常见问题
 

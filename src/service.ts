@@ -19,7 +19,7 @@ import type {
   Stat,
   UserSummary,
 } from './types'
-import { matchesMaskedKey } from './utils/format'
+import { matchesMaskedKey, shortMask } from './utils/format'
 import { DAY_SECONDS, localDayIndex, startOfLocalDay, tzOffsetSeconds } from './utils/time'
 
 export interface UsageDataSource {
@@ -105,7 +105,7 @@ export class UsageService {
     return this.memo('summary', () => this.client.getSummary(), force)
   }
 
-  /** 用户提交完整 Key 完成绑定，只保存脱敏信息。 */
+  /** 用户提交完整 Key 或 Key 尾号完成绑定，只保存脱敏信息。 */
   async addBinding(rawKey: string, userId: string): Promise<{ binding: Binding; count: number }> {
     await this.store.ready()
     const current = this.store.get(userId)
@@ -113,17 +113,28 @@ export class UsageService {
       throw new BindError(`最多只能绑定 ${this.config.maxBindings} 个 Key，先用 dsu.remove 删掉一个。`)
     }
 
-    let matches = (await this.keys()).filter((key) => matchesMaskedKey(rawKey, key.sensitiveId))
+    const candidate = rawKey.trim()
+    const suffixOnly = /^[A-Za-z0-9]{4,32}$/.test(candidate) && !candidate.startsWith('sk-')
+    const matcher = (key: ApiKeyInfo) =>
+      suffixOnly
+        ? key.sensitiveId.toLowerCase().endsWith(candidate.toLowerCase())
+        : matchesMaskedKey(candidate, key.sensitiveId)
+
+    let matches = (await this.keys()).filter(matcher)
     if (matches.length === 0) {
       // 可能刚在平台上新建了 Key，缓存还没过期，强制刷新一次再试
-      matches = (await this.keys(true)).filter((key) => matchesMaskedKey(rawKey, key.sensitiveId))
+      matches = (await this.keys(true)).filter(matcher)
     }
     if (matches.length === 0) {
-      throw new BindError('没有在平台账号里找到这个 Key，确认一下是不是复制完整了，或者它是不是这个账号下的 Key。')
+      throw new BindError(
+        suffixOnly
+          ? `没有在这个账号里找到尾号「${candidate}」的 Key，确认一下尾号，或者这个 Key 是不是这个账号下的。`
+          : '没有在平台账号里找到这个 Key，确认一下是不是复制完整了，或者它是不是这个账号下的 Key。',
+      )
     }
     if (matches.length > 1) {
-      const names = matches.map((key) => key.name || key.trackingId).join('、')
-      throw new BindError(`这个 Key 同时匹配到多个记录（${names}），麻烦联系管理员手动绑定。`)
+      const names = matches.map((key) => `${key.name || key.trackingId}（${shortMask(key.sensitiveId)}）`).join('、')
+      throw new BindError(`「${candidate}」同时匹配到多个 Key：${names}，请多写几位尾号。`)
     }
     const key = matches[0]
     if (current.some((binding) => binding.trackingId === key.trackingId)) {
@@ -133,8 +144,10 @@ export class UsageService {
     if (owner && owner.boundBy !== userId) {
       throw new BindError('这个 Key 已经被添加过了，不能重复绑定。')
     }
-    // 用官方接口确认 Key 真的有效（401 会被拒绝）；402 余额不足也算有效
-    await this.verifier.getBalance(rawKey)
+    // 尾号绑定不拿到完整 Key，无法调用官方接口校验；Key 列表本身来自平台账号
+    if (!suffixOnly) {
+      await this.verifier.getBalance(candidate)
+    }
     const binding: Binding = {
       trackingId: key.trackingId,
       name: key.name,

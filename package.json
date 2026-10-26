@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-deepseek-keyusage",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "DeepSeek API Key 用量查询：余额、花费、Token 与缓存命中率，支持一人多 Key",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -52,8 +52,5 @@
     "koishi": "^4.18.11",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
-  },
-  "dependencies": {
-    "classic-level": "^3.0.0"
   }
 }

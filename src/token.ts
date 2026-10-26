@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import type { LoggerLike } from './store'
+import { readLevelDb } from './leveldb'
 
 const TOKEN_PATTERN = /\{"value":"([A-Za-z0-9+/_.\-]{16,400})","__version":"?\d+"?\}/g
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g
@@ -79,35 +79,23 @@ function decodeStorageValue(value: Buffer): string {
 }
 
 /**
- * 用 LevelDB 读取器精确取出 platform.deepseek.com 的 userToken。
- * 浏览器运行时数据库是锁住的，所以先复制到临时目录再读。
+ * 用纯 JS 的 LevelDB 读取器精确取出 platform.deepseek.com 的 userToken。
+ * 不依赖原生模块，也不会复制/修改浏览器文件。
  */
 async function readLevelDbTokens(dir: string, logger?: LoggerLike): Promise<string[]> {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsu-leveldb-'))
-  let db: any
   try {
-    await fs.cp(dir, temp, { recursive: true })
-    const { ClassicLevel } = await import('classic-level')
-    db = new ClassicLevel(temp, { keyEncoding: 'buffer', valueEncoding: 'buffer' })
-    await db.open()
+    const entries = await readLevelDb(dir)
     const tokens: string[] = []
-    for await (const [key, value] of db.iterator()) {
-      const keyText = Buffer.from(key as Buffer).toString('latin1')
+    for (const entry of entries) {
+      const keyText = entry.key.toString('latin1')
       if (!keyText.includes('platform.deepseek.com') || !keyText.endsWith('userToken')) continue
-      const token = decodeStorageValue(Buffer.from(value as Buffer))
+      const token = decodeStorageValue(entry.value)
       if (token) tokens.push(token)
     }
     return tokens
   } catch (error) {
     logger?.debug?.(`读取浏览器 LevelDB 失败：${(error as Error).message}`)
     return []
-  } finally {
-    try {
-      await db?.close?.()
-    } catch {
-      // 忽略关闭失败
-    }
-    await fs.rm(temp, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 

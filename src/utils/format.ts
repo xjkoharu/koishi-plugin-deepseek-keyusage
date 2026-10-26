@@ -76,3 +76,8 @@ export function matchesMaskedKey(fullKey: string, sensitiveId: string): boolean 
 export function looksLikeApiKey(key: string): boolean {
   return /^sk-[A-Za-z0-9]{16,}$/.test(key.trim())
 }
+
+/** 允许用户只提供 Key 尾号，避免在聊天里发完整 Key。 */
+export function looksLikeKeySuffix(value: string): boolean {
+  return /^[A-Za-z0-9]{4,32}$/.test(value.trim())
+}

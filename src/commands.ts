@@ -2,6 +2,7 @@ import { h } from 'koishi'
 import type { Argv, Context, Session } from 'koishi'
 import type { Config } from './config'
 import { isPlatformError } from './api/errors'
+import { stripQuotedQuery } from './utils/query'
 import type { LoggerLike } from './store'
 import { BindError, UsageService } from './service'
 import {
@@ -12,8 +13,9 @@ import {
   renderReports,
   type RenderOptions,
 } from './render'
+import type { AccountOverview } from './types'
 import { isAdminUser } from './permissions'
-import { looksLikeApiKey, shortMask } from './utils/format'
+import { looksLikeApiKey, looksLikeKeySuffix, shortMask } from './utils/format'
 
 const MAX_COOLDOWN_ENTRIES = 5000
 
@@ -110,10 +112,15 @@ export function applyCommands(
 
   const markdownReply = (text: string) => h('qq:rawmarkdown-without-keyboard', {}, text)
 
-  const showReports = (session: Session, reports: Parameters<typeof renderReports>[0], startIndex = 0) => {
+  const showReports = (
+    session: Session,
+    reports: Parameters<typeof renderReports>[0],
+    startIndex = 0,
+    overview?: AccountOverview,
+  ) => {
     const options = renderOptions(session, config)
     const markdown = useMarkdown(session)
-    const text = renderReports(reports, options, startIndex, markdown)
+    const text = renderReports(reports, options, startIndex, markdown, overview)
     return markdown ? markdownReply(text) : text
   }
 
@@ -124,31 +131,76 @@ export function applyCommands(
       : renderBindingList(bindings, options)
   }
 
+  const bindKey = async (session: Session, rawKey: string, usage: string, checkCooldown = true) => {
+    if (!rawKey) return `用法：${usage} 25f0\n也可以发完整的 sk-... Key。`
+    if (session.guildId && !config.allowGroupBind) {
+      return '为了安全，请私聊机器人添加 Key。'
+    }
+    if (!looksLikeApiKey(rawKey) && !looksLikeKeySuffix(rawKey)) {
+      return '请发 Key 尾号（至少 4 位，如 25f0）或完整的 sk-... Key。'
+    }
+    if (checkCooldown) {
+      const left = cooldownLeft(session)
+      if (left > 0) return `操作太频繁啦，${left} 秒后再试。`
+    }
+    const key = userKey(session)!
+    const { binding, count } = await service.addBinding(rawKey, key)
+    const lines = [`添加成功：${binding.name}（${shortMask(binding.sensitiveId)}）`]
+    lines.push(
+      count > 1
+        ? `你现在绑定了 ${count} 个 Key，发送 dsu 查看全部详情。`
+        : '以后直接发 dsu 就能查用量了。',
+    )
+    if (session.guildId) lines.push('建议撤回刚才那条包含 Key 的消息。')
+    return lines.join('\n')
+  }
+
   const main = ctx
-    .command('dsu [query:string]', '查询 DeepSeek API 用量')
+    .command('dsu [query:text]', '查询 DeepSeek API 用量')
     .usage(
       [
         '查询自己添加的 API Key 的余额、花费和 Token 用量。',
-        '第一次使用先添加：dsu.add sk-你的Key，可以添加多个。',
+        '第一次使用先添加：dsu.add 25f0（Key 尾号）或 dsu.add sk-你的Key，可以添加多个。',
+        '也支持空格写法：dsu add 25f0，等同 dsu.add 25f0。',
         'dsu 一次列出所有已绑定 Key 的详情，dsu <序号或名字> 只看某一个。',
+        '管理员发 dsu 时会额外显示账户总用量。',
         '管理员：dsu.all 看全部 Key，dsu.key <名字> 查指定 Key。',
       ].join('\n'),
     )
     .example('dsu')
     .example('dsu 示例A')
+    .example('dsu.add 25f0')
+    .example('dsu add 25f0')
     .example('dsu.add sk-xxxxxxxxxxxxxxxx')
     .action(
       guard(async (session, argv) => {
         const left = cooldownLeft(session)
         if (left > 0) return `查询太频繁啦，${left} 秒后再试。`
         const key = userKey(session)!
-        const bindings = await service.getBindings(key)
-        if (!bindings.length) return UNBOUND_MESSAGE
+        const admin = isAdmin(session, config)
+        const query = stripQuotedQuery(
+          (argv.args ?? []).map((value) => String(value)).join(' '),
+          session.quote?.content,
+        )
 
-        const query = String(argv.args?.[0] ?? '').trim()
+        // 支持 `dsu add 25f0` 这种空格写法，等效于 dsu.add 25f0
+        const spaced = /^(add|bind)\b\s*(.*)$/i.exec(query)
+        if (spaced) {
+          const rest = spaced[2].trim()
+          if (!rest) return '用法：dsu.add 25f0（或完整 sk-... Key）'
+          return bindKey(session, rest, `dsu.${spaced[1].toLowerCase()}`, false)
+        }
+
+        const bindings = await service.getBindings(key)
+        if (!bindings.length) {
+          if (admin) return showReports(session, [], 0, await service.overview())
+          return UNBOUND_MESSAGE
+        }
+
         if (!query) {
           const reports = await service.reportsForUser(key)
-          return showReports(session, reports)
+          const overview = admin ? await service.overview() : undefined
+          return showReports(session, reports, 0, overview)
         }
 
         const matches = await service.matchBindings(key, query)
@@ -173,38 +225,21 @@ export function applyCommands(
   const addHandler = (usage: string) =>
     guard(async (session, argv) => {
       const rawKey = String(argv.args?.[0] ?? '').trim()
-      if (!rawKey) return `用法：${usage} sk-你的Key`
-      if (session.guildId && !config.allowGroupBind) {
-        return '为了安全，请私聊机器人添加 Key。'
-      }
-      if (!looksLikeApiKey(rawKey)) {
-        return '这看起来不像一个 API Key（应该以 sk- 开头）。'
-      }
-      const left = cooldownLeft(session)
-      if (left > 0) return `操作太频繁啦，${left} 秒后再试。`
-      const key = userKey(session)!
-      const { binding, count } = await service.addBinding(rawKey, key)
-      const lines = [`添加成功：${binding.name}（${shortMask(binding.sensitiveId)}）`]
-      lines.push(
-        count > 1
-          ? `你现在绑定了 ${count} 个 Key，发送 dsu 查看全部详情。`
-          : '以后直接发 dsu 就能查用量了。',
-      )
-      if (session.guildId) lines.push('建议撤回刚才那条包含 Key 的消息。')
-      return lines.join('\n')
+      return bindKey(session, rawKey, usage)
     })
 
   ctx
     .command('dsu.add <key:string>', '添加一个 DeepSeek API Key')
-    .usage('可以添加多个 Key；只保存脱敏信息，不保存完整 Key。')
+    .usage('可以发完整 Key，也可以只发 Key 尾号（如 25f0）；只保存脱敏信息。')
+    .example('dsu.add 25f0')
     .example('dsu.add sk-xxxxxxxxxxxxxxxx')
     .action(addHandler('dsu.add'))
 
   // 兼容旧指令
   ctx
     .command('dsu.bind <key:string>', '添加一个 DeepSeek API Key（旧指令）')
-    .usage('等同 dsu.add。')
-    .example('dsu.bind sk-xxxxxxxxxxxxxxxx')
+    .usage('等同 dsu.add，也支持只发 Key 尾号。')
+    .example('dsu.bind 25f0')
     .action(addHandler('dsu.add'))
 
   ctx

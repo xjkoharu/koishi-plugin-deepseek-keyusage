@@ -104,22 +104,59 @@ function reportBlock(report: Report, index: number, options: RenderOptions, mark
   return lines
 }
 
+function accountSummaryLines(overview: AccountOverview, options: RenderOptions, markdown: boolean): string[] {
+  let todayCost = 0
+  let todayTokens = 0
+  for (const item of overview.keys) {
+    todayCost += item.today.cost
+    todayTokens += totalTokens(item.today)
+  }
+
+  const first: string[] = []
+  if (options.showBalance && overview.balance) {
+    first.push(`余额 ${formatMoney(overview.balance.total, overview.balance.currency)}`)
+  }
+  first.push(`累计花费 ${formatMoney(overview.accountCost, options.currency)}`)
+  first.push(`累计 Token ${formatInt(overview.accountTokens)}`)
+
+  const second = [
+    `今日花费 ${formatMoney(todayCost, options.currency)}`,
+    `今日 Token ${formatInt(todayTokens)}`,
+    `Key ${overview.keys.length} 个`,
+  ]
+
+  if (markdown) {
+    return ['**账户总用量**', `- ${first.join(' · ')}`, `- ${second.join(' · ')}`]
+  }
+  return ['账户总用量：', `  ${first.join(' · ')}`, `  ${second.join(' · ')}`]
+}
+
 /**
  * 一个或多个 Key 的完整报告。
  * startIndex 是这批报告在用户绑定列表里的起始下标（用于 API-1 / API-2 编号）。
+ * overview 传入时会在最上面额外显示账户总用量（管理员 dsu 使用）。
  */
 export function renderReports(
   reports: Report[],
   options: RenderOptions,
   startIndex = 0,
   markdown = false,
+  overview?: AccountOverview,
 ): string {
-  const lines = [markdown ? '**DeepSeek API用量**' : 'DeepSeek API用量：']
+  const lines: string[] = []
+  if (overview) {
+    lines.push(...accountSummaryLines(overview, options, markdown))
+    lines.push('')
+  }
+  lines.push(markdown ? '**DeepSeek API用量**' : 'DeepSeek API用量：')
+  if (!reports.length) {
+    lines.push('你还没有添加 API Key。')
+  }
   reports.forEach((report, index) => {
     if (index > 0) lines.push('')
     lines.push(...reportBlock(report, startIndex + index + 1, options, markdown))
   })
-  const updatedAt = reports[0]?.updatedAt ?? Date.now()
+  const updatedAt = reports[0]?.updatedAt ?? overview?.updatedAt ?? Date.now()
   lines.push('')
   lines.push(`更新于：${formatDateTime(updatedAt, options.timeZone)}`)
   return lines.join('\n')

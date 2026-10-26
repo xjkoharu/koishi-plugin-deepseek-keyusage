@@ -37,6 +37,14 @@ const API_KEY2 = {
   last_use: null,
 }
 
+const API_KEY3 = {
+  tracking_id: 'tk_3',
+  name: '示例C',
+  sensitive_id: 'sk-klmno**9012',
+  created_at: nowSeconds - 2 * 86400,
+  last_use: null,
+}
+
 const FULL_KEY2 = 'sk-fghij0123456789abcdef5678'
 
 const envelope = (biz: unknown) => JSON.stringify({ code: 0, data: { biz_code: 0, biz_data: biz } })
@@ -55,7 +63,7 @@ function createServer() {
       res.end(body)
     }
     if (url.pathname === '/api/v0/users/get_api_keys') {
-      return send(envelope({ api_keys: [API_KEY, API_KEY2] }))
+      return send(envelope({ api_keys: [API_KEY, API_KEY2, API_KEY3] }))
     }
     if (url.pathname === '/api/v0/users/get_user_summary') {
       return send(
@@ -232,11 +240,19 @@ describe('plugin integration', () => {
     expect(forKeyOne?.query.get('tz')).toBe(String(TZ))
   })
 
+  it('shows account totals when an admin runs dsu', async () => {
+    const text = (await admin.receive('dsu')).join('\n')
+    expect(text).toContain('账户总用量：')
+    expect(text).toContain('累计花费 ¥3.21')
+    expect(text).toContain('Key 3 个')
+    expect(text).toContain('你还没有添加 API Key')
+  })
+
   it('lets admins see all keys', async () => {
     const text = (await admin.receive('dsu.all')).join('\n')
     expect(text).toContain('DeepSeek 账户总览')
     expect(text).toContain('累计花费 ¥3.21')
-    expect(text).toContain('Key 2 个')
+    expect(text).toContain('Key 3 个')
     expect(text).toContain('示例A sk-abcde**1234')
     expect(text).toContain('示例B sk-fghij**5678')
   })
@@ -261,5 +277,12 @@ describe('plugin integration', () => {
     expect(text).not.toContain('API-2')
     expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 1 个 Key')
     expect((await client.receive('dsu')).join('\n')).toContain('你还没有添加 API Key')
+  })
+
+  it('binds by key suffix using the spaced dsu add syntax', async () => {
+    const second = (app as any).mock.client('user-2', 'channel-3')
+    const text = (await second.receive('dsu add 9012')).join('\n')
+    expect(text).toContain('添加成功：示例C')
+    expect(text).toContain('sk-klmno**9012')
   })
 })

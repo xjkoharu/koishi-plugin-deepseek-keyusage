@@ -68,6 +68,43 @@ describe('renderReport', () => {
     expect(text).toContain('API-2：sk-fghij**5678')
     expect(text.indexOf('API-1')).toBeLessThan(text.indexOf('API-2'))
   })
+
+  it('prepends the account total for admins', () => {
+    const overview: AccountOverview = {
+      keys: [
+        { key, total: report.total, today: report.today },
+        {
+          key: { ...key, trackingId: 'tk_2', name: '示例B', sensitiveId: 'sk-fghij**5678' },
+          total: report.total,
+          today: report.today,
+        },
+      ],
+      total: report.total,
+      accountCost: 0.5,
+      accountTokens: 187,
+      balance: report.balance,
+      updatedAt: report.updatedAt,
+    }
+    const text = renderReports([report], options, 0, true, overview)
+    expect(text).toContain('**账户总用量**')
+    expect(text).toContain('- 余额 ¥12.50 · 累计花费 ¥0.500 · 累计 Token 187')
+    expect(text).toContain('- 今日花费 ¥0.040 · 今日 Token 34 · Key 2 个')
+    expect(text).toContain('**DeepSeek API用量**')
+  })
+
+  it('shows the account total even without bindings', () => {
+    const overview: AccountOverview = {
+      keys: [{ key, total: report.total, today: report.today }],
+      total: report.total,
+      accountCost: 0.5,
+      accountTokens: 187,
+      balance: report.balance,
+      updatedAt: report.updatedAt,
+    }
+    const text = renderReports([], options, 0, false, overview)
+    expect(text).toContain('账户总用量：')
+    expect(text).toContain('你还没有添加 API Key')
+  })
 })
 
 describe('renderOverview', () => {
