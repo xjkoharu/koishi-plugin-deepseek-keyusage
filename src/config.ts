@@ -33,6 +33,8 @@ export interface Config {
   maxKeys: number
   /** 每个用户最多绑定多少个 Key */
   maxBindings: number
+  /** 管理员 dsu.all 每页展示多少个 Key */
+  allPageSize: number
   /** 单次请求超时（毫秒） */
   requestTimeout: number
   /** 输出调试日志 */
@@ -53,6 +55,8 @@ export const Config: Schema<Config> = Schema.object({
         '',
         '手动获取：登录 platform.deepseek.com → F12 → Application → Local Storage → `https://platform.deepseek.com` → 复制 `userToken` 的值。',
         '留空时插件会自动尝试读取本机浏览器，也会读取环境变量 `DEEPSEEK_PLATFORM_TOKEN`。',
+        '',
+        '这是插件默认使用的平台账号；`dsu.add` 只发 Key 尾号时，会在这个账号的 Key 列表里匹配。',
       ].join('\n'),
     ),
   autoReadToken: Schema.boolean()
@@ -61,7 +65,7 @@ export const Config: Schema<Config> = Schema.object({
       '没有手动填写 Token 时，自动读取本机 Edge / Chrome 的 Local Storage（只会查找并验证 platform.deepseek.com 的登录态，不会上传任何浏览器数据）。',
     ),
   apiBaseUrl: Schema.string().default('https://platform.deepseek.com').description('平台接口地址。'),
-  officialBaseUrl: Schema.string().default('https://api.deepseek.com').description('官方 API 地址，用于校验用户提交的 Key。'),
+  officialBaseUrl: Schema.string().default('https://api.deepseek.com').description('官方 API 地址，用于校验完整 Key；只发 Key 尾号时不需要。'),
   timeZone: Schema.string().default('Asia/Shanghai').description('时区，决定「今日」的起止时间。'),
   currency: Schema.union(['CNY', 'USD'] as const).default('CNY').description('展示与统计使用的币种。'),
   cacheTtl: Schema.natural().min(0).max(3600).default(60).description('查询结果缓存时间（秒），避免频繁请求平台。'),
@@ -75,7 +79,7 @@ export const Config: Schema<Config> = Schema.object({
     .default([])
     .role('table')
     .description('管理员白名单，可填 `qq:openid`、`onebot:QQ号` 或纯用户 ID。与权限等级取并集，任意一条命中即为管理员。'),
-  allowGroupBind: Schema.boolean().default(true).description('是否允许在群聊中绑定 Key。关闭后只能在私聊绑定（更安全）。'),
+  allowGroupBind: Schema.boolean().default(true).description('是否允许在群聊中绑定 Key。关闭后只能在私聊绑定（更安全；只发 Key 尾号也不会暴露完整 Key）。'),
   showBalance: Schema.boolean().default(true).description('是否向普通用户展示账户总余额。'),
   qqMarkdown: Schema.boolean()
     .default(true)
@@ -86,6 +90,7 @@ export const Config: Schema<Config> = Schema.object({
     .description('主指令（dsu）的额外别名。如果和其他插件冲突，可以在这里删掉。'),
   maxKeys: Schema.natural().min(1).max(200).default(30).description('管理员总览最多展示多少个 Key。'),
   maxBindings: Schema.natural().min(1).max(50).default(5).description('每个用户最多可以绑定多少个 Key。'),
+  allPageSize: Schema.natural().min(1).max(50).default(10).description('管理员 dsu.all 每页展示多少个 Key。'),
   requestTimeout: Schema.natural().min(1000).max(60000).default(10000).description('单次请求超时（毫秒）。'),
   debug: Schema.boolean().default(false).description('输出调试日志。'),
 })
@@ -107,6 +112,7 @@ export const DEFAULT_CONFIG: Config = {
   aliases: ['额度'],
   maxKeys: 30,
   maxBindings: 5,
+  allPageSize: 10,
   requestTimeout: 10000,
   debug: false,
 }

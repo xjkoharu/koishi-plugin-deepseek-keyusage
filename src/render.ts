@@ -1,4 +1,5 @@
 import { hitRate, inputTokens, totalTokens } from './aggregate'
+import type { AllPage } from './account-service'
 import type { AccountOverview, Binding, Report, Stat } from './types'
 import { formatCompact, formatInt, formatMoney, formatPercent, shortMask } from './utils/format'
 import { formatDateTime } from './utils/datetime'
@@ -77,6 +78,7 @@ function reportBlock(report: Report, index: number, options: RenderOptions, mark
   } else {
     lines.push(`API-${index}：${masked}`)
   }
+  if (report.accountLabel) lines.push(field(`账号：${report.accountLabel}`))
   lines.push(field(`名称：${name}`))
 
   if (options.showBalance && report.balance) {
@@ -259,3 +261,37 @@ export function renderOverviewDefault(overview: AccountOverview, options: Render
 registerRenderer('qq', {})
 registerRenderer('qqguild', {})
 registerRenderer('onebot', {})
+
+/** 管理员 dsu.all 的跨账号分页视图。 */
+export function renderAllPage(data: AllPage, options: RenderOptions, markdown = false): string {
+  const lines: string[] = []
+  lines.push(markdown ? '**DeepSeek 账户总览（全部）**' : 'DeepSeek 账户总览（全部）：')
+  lines.push(
+    `账号 ${data.accounts} 个 · Key ${data.keys} 个 · 第 ${data.page}/${data.pages} 页`,
+  )
+  lines.push(
+    `余额合计 ${formatMoney(data.balance, options.currency)} · 累计花费 ${formatMoney(data.totalCost, options.currency)} · 累计 Token ${formatCompact(data.tokens)}`,
+  )
+  lines.push('')
+
+  data.entries.forEach((entry, index) => {
+    const name = markdown ? escapeMarkdown(entry.key.name) : entry.key.name
+    const masked = shortMask(entry.key.sensitiveId) || entry.key.trackingId
+    const prefix = `${(data.page - 1) * data.pageSize + index + 1}. ${entry.label} / ${name} ${masked}`
+    lines.push(markdown ? `- ${prefix}${entry.binding ? '（已绑定）' : ''}` : prefix + (entry.binding ? '（已绑定）' : ''))
+    lines.push(
+      `   今日 ${formatMoney(entry.today.cost, options.currency)} / ${formatCompact(totalTokens(entry.today))} tok` +
+        ` · 累计 ${formatMoney(entry.total.cost, options.currency)} / ${formatCompact(totalTokens(entry.total))} tok` +
+        ` · 命中 ${formatPercent(hitRate(entry.total))}`,
+    )
+  })
+
+  if (data.pages > 1) {
+    lines.push('')
+    const next = data.page < data.pages ? data.page + 1 : data.pages
+    lines.push(`发送 dsu.all ${next} 查看${data.page < data.pages ? '下一页' : '最后一页'}。`)
+  }
+  lines.push('')
+  lines.push(`更新于 ${formatDateTime(data.updatedAt, options.timeZone)}`)
+  return lines.join('\n')
+}

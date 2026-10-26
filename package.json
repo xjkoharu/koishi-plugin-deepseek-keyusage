@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-deepseek-keyusage",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "DeepSeek API Key 用量查询：余额、花费、Token 与缓存命中率，支持一人多 Key",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -31,8 +31,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "查询 DeepSeek API Key 的余额、花费与 Token 用量，支持一人多 Key",
-      "en": "Query DeepSeek API key balance, spending and token usage"
+      "zh": "查询 DeepSeek API Key 的余额、花费与 Token 用量，支持多账号多 Key、Key 尾号绑定",
+      "en": "Query DeepSeek API key balance, spending and token usage, with multi-account, multi-key and key-suffix binding"
     }
   },
   "scripts": {
@@ -47,6 +47,7 @@
     "koishi": "^4.18.0"
   },
   "devDependencies": {
+    "@koishijs/plugin-database-memory": "^3.7.0",
     "@koishijs/plugin-mock": "^2.6.6",
     "@types/node": "^22.10.0",
     "koishi": "^4.18.11",

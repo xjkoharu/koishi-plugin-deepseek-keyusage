@@ -100,6 +100,8 @@ export interface Report {
   balance?: BalanceInfo
   range: { start: number; end: number }
   updatedAt: number
+  /** 多账号展示用：账号1、账号2 */
+  accountLabel?: string
 }
 
 export interface KeyOverview {

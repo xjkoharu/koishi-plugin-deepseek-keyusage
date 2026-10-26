@@ -9,6 +9,7 @@
 **DeepSeek API用量**
 
 - **API-1**：`sk-abcde**1234`
+  - 账号：账号1
   - 名称：示例
   - 余额 ¥67.67（赠金 ¥7.77 / 充值 ¥59.90）
   - 累计花费 ¥12.33 · Token 2,148,838
@@ -25,14 +26,30 @@
 
 ## 功能
 
-- `dsu`：查自己的余额、累计/今日花费、Token 明细和缓存命中率
-- 管理员发 `dsu` 时，默认先显示账户总用量（余额、累计花费、累计/今日 Token），再显示自己绑定的 Key
-- 一个用户可以绑定多个 Key：`dsu.add 25f0`（Key 尾号）或 `dsu.add sk-...`，`dsu` 会一次列出所有 Key 的完整用量
-- `dsu.all`（管理员）：所有 Key 的今日/累计花费、Token、命中率，以及账户总花费
-- `dsu.key <名字>`（管理员）：按名字 / Key ID / 脱敏后缀查任意一个 Key
+- `dsu`：查自己绑定的所有账号 / Key 的余额、累计/今日花费、Token 明细和缓存命中率
+- 一个用户可以绑定多个账号下的多个 Key：每个 `userToken` 是一个账号，账号下可以绑定多个 Key
+- 支持只发 Key 尾号绑定（`dsu.add 25f0`），避免在聊天里发完整 Key；也支持 `dsu add 25f0` 空格写法
+- `dsu.token`：通过聊天读取/设置账号 Token，保存到数据库；不填 token 时读取 bot 所在电脑的浏览器
+- 别人把 userToken 和 Key 给你，你也可以绑；`dsu.add 25f0 对方的userToken` 一条命令完成
+- `dsu.all [页码]`（管理员）：跨所有账号汇总，分页显示；`dsu.key <名字>` 跨所有账号查单个 Key
 - 支持 `adapter-qq`（`qq` / `qqguild`）与 `adapter-onebot`，渲染层可扩展
-- 平台 Token 在 Koishi 控制台的插件配置里填；配置项下面是「从本机一键读取Token」链接，点一下自动读取、填入配置、写入 `.env` 并复制到剪贴板
-- 留空时插件会**自动**从本机 Edge / Chrome 读取，不需要手动复制
+- 平台 Token / 绑定关系存在 Koishi 数据库里，不写 JSON 文件，不显示原文
+
+## 多账号怎么用
+
+```text
+dsu.token                       # 读取 bot 本机浏览器，保存为当前账号
+dsu.token 你的userToken          # 或者直接粘贴另一个账号的 token
+dsu.add 25f0                    # 在当前账号里按尾号绑定 Key
+dsu.add 25f0 另一个userToken     # 直接绑到另一个账号
+dsu                             # 列出所有账号下的 Key
+dsu 账号2                       # 只看账号2
+dsu.list                        # 只看绑定列表
+```
+
+同一个账号下的多个 Key 共用余额；不同账号的余额分开显示。账号编号（账号1、账号2）按绑定顺序自动生成。
+
+> `dsu.token` 的「一键读取」只能读 **bot 跑的那台电脑** 的 Edge/Chrome。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token`。
 
 ## 工作原理（先看这段）
 
@@ -55,9 +72,11 @@ DeepSeek 官方 API 只提供[账号级余额接口](https://api-docs.deepseek.c
 
 > 平台对单次查询有 **31 天** 的上限，且 `end` 必须是开区间；插件会自动按 31 天分段查询再合并，所以「累计」是完整的。
 >
-> 余额是**账号级**的，所以所有人看到的是同一个余额；花费和 Token 是按 Key 分开的。
+> 余额是**账号级**的：同一个 userToken 下的 Key 共用一个余额，不同账号的余额分开显示；花费和 Token 按 Key 分开统计。
 
 ## 安装
+
+> 多账号版需要 Koishi 的 **database** 服务。Koishi Desktop 默认带 SQLite；如果使用纯 Koishi 项目，请先安装 `@koishijs/plugin-database-sqlite` 或其他数据库插件。
 
 在 Koishi 项目目录里：
 
@@ -81,34 +100,28 @@ plugins:
 
 ## 平台 Token
 
-插件需要 DeepSeek 开放平台的登录态，二选一：
+多账号版推荐直接用聊天命令：
 
-**方式 A：一键读取（推荐）**
+```text
+dsu.token                  # 读取 bot 所在电脑的 Edge/Chrome
+dsu.token 你的userToken     # 或者直接粘贴
+```
 
-打开 Koishi 控制台 → 插件配置 → `deepseek-keyusage`，点「平台 Token」下面的：
+Token 会保存到这个用户的默认账号，之后 `dsu.add 25f0` 就用它。绑定关系和多账号 Token 都存在 Koishi 数据库里，不会写回 `koishi.yml`，也不会在聊天里显示原文。
+
+如果你更习惯控制台，也可以打开 Koishi 控制台 → 插件配置 → `deepseek-keyusage`，点「平台 Token」下面的：
 
 > 从本机一键读取Token
 
-点一下会依次完成：
+点一下会扫描本机 Edge / Chrome、验证、填入插件配置并写回 `koishi.yml`，同时写入 `.env` 和剪贴板。
 
-1. 扫描本机 Edge / Chrome 的 Local Storage，只找 `platform.deepseek.com` 的 `userToken`；
-2. 用平台接口验证有效性；
-3. 填入插件配置并写回 `koishi.yml`；
-4. 写入项目根目录的 `.env`（`DEEPSEEK_PLATFORM_TOKEN`）；
-5. 复制到系统剪贴板；
-6. 跳回配置页，没有额外的页面。
+**手动获取**：登录 [platform.deepseek.com](https://platform.deepseek.com) → `F12` → `Application` → `Local Storage` → `https://platform.deepseek.com` → 复制 `userToken` 的值。
 
-Token 输入框保持留空也能正常用（会读取缓存文件）。
-
-**方式 B：手动复制**
-
-登录 [platform.deepseek.com](https://platform.deepseek.com) → `F12` → `Application` → `Local Storage` → `https://platform.deepseek.com` → 复制 `userToken` 的值，粘贴到插件配置里。
-
-> 自动读取的前提：浏览器和 Koishi 在同一台电脑上，且已经登录过平台。读取范围仅限浏览器 Local Storage 文件，不会上传任何数据；Token 只保存在本机 `data/deepseek-keyusage/` 下。
+> `dsu.token` 的浏览器读取只能读 **bot 跑的那台电脑**。朋友在自己的电脑上，需要把 userToken 私聊发给 bot，或者用 `dsu.add 25f0 他的token`。
 >
 > `userToken` 等同于账号登录态。不要发到公开渠道，也不要提交到公开仓库。
 
-**Token 的解析顺序**：配置项 → 环境变量 `DEEPSEEK_PLATFORM_TOKEN` → 本地缓存文件 → 自动扫描浏览器。
+**默认 Token 的解析顺序**：当前用户数据库里保存的默认账号 → 插件配置的 `userToken` → 环境变量 `DEEPSEEK_PLATFORM_TOKEN` → 本地缓存文件。
 
 ## 配置
 
@@ -116,10 +129,10 @@ Token 输入框保持留空也能正常用（会读取缓存文件）。
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `userToken` | 空 | 平台登录态，密码框显示。留空时自动读取 |
-| `autoReadToken` | `true` | 自动从本机 Edge / Chrome 读取 Token（只查找 `platform.deepseek.com`，不校验通过不会使用） |
+| `userToken` | 空 | 后备的全局平台 Token；聊天里用 `dsu.token` 设置的账号优先 |
+| `autoReadToken` | `true` | 没有 Token 时自动从本机 Edge / Chrome 读取（只查找 `platform.deepseek.com`，不校验通过不会使用） |
 | `apiBaseUrl` | `https://platform.deepseek.com` | 平台接口地址 |
-| `officialBaseUrl` | `https://api.deepseek.com` | 官方接口，用于绑定校验 Key |
+| `officialBaseUrl` | `https://api.deepseek.com` | 官方接口，用于校验完整 Key；只发尾号时不需要 |
 | `timeZone` | `Asia/Shanghai` | 决定「今日」的边界 |
 | `currency` | `CNY` | 展示币种，可选 `USD` |
 | `cacheTtl` | `60` | 结果缓存秒数，减少平台请求 |
@@ -129,8 +142,9 @@ Token 输入框保持留空也能正常用（会读取缓存文件）。
 | `allowGroupBind` | `true` | 是否允许在群里添加 Key；建议关掉，只允许私聊 |
 | `showBalance` | `true` | 是否给普通用户看账户余额 |
 | `aliases` | `['额度']` | 主指令别名，冲突时删掉即可 |
-| `maxKeys` | `30` | `dsu.all` 最多展示多少个 Key |
+| `maxKeys` | `30` | 单次详情最多展示多少个 Key |
 | `maxBindings` | `5` | 每个用户最多绑定多少个 Key |
+| `allPageSize` | `10` | 管理员 `dsu.all` 每页展示多少个 Key |
 | `requestTimeout` | `10000` | 请求超时（毫秒） |
 | `debug` | `false` | 输出请求日志 |
 
@@ -147,18 +161,20 @@ Token 输入框保持留空也能正常用（会读取缓存文件）。
 
 | 指令 | 说明 | 权限 |
 | --- | --- | --- |
-| `dsu` | 列出自己绑定的所有 Key 的完整用量 | 已添加用户 |
-| `dsu <序号/名字>` | 只看指定的那个 Key | 已添加用户 |
-| `dsu.add <尾号>` | 用 Key 尾号（如 `25f0`）添加，避免在聊天里发完整 Key | 所有人 |
-| `dsu add <尾号>` | 空格写法，等同 `dsu.add <尾号>` | 所有人 |
-| `dsu.add sk-xxx` | 用完整 Key 添加（也可以只发尾号） | 所有人 |
+| `dsu` | 列出自己绑定的所有账号 / Key 的完整用量 | 已绑定用户 |
+| `dsu 账号1` | 只看某个账号下的 Key | 已绑定用户 |
+| `dsu <序号/名字>` | 只看指定的那个 Key | 已绑定用户 |
+| `dsu.token [userToken]` | 设置当前账号；不填 token 时读取 bot 本机浏览器 | 所有人 |
+| `dsu.add <Key尾号> [userToken]` | 用 Key 尾号绑定；不填 token 时用当前账号 | 所有人 |
+| `dsu.add sk-xxx [userToken]` | 用完整 Key 绑定 | 所有人 |
+| `dsu add <Key尾号>` | 空格写法，等同 `dsu.add <Key尾号>` | 所有人 |
 | `dsu.remove <序号/名字>` | 移除某个 Key | 所有人 |
 | `dsu.list` | 列出自己绑定的 Key | 所有人 |
-| `dsu.unbind` | 解绑全部 Key | 所有人 |
-| `dsu.all` | 所有 Key + 账户总览 | 管理员 |
-| `dsu.key <名字>` | 查指定 Key | 管理员 |
+| `dsu.unbind` | 解绑全部 Key 和默认账号 | 所有人 |
+| `dsu.all [页码]` | 跨所有账号汇总全部 Key，分页显示 | 管理员 |
+| `dsu.key <名字>` | 跨所有账号查指定 Key | 管理员 |
 | `dsu.refresh` | 清空缓存 | 管理员 |
-| `dsu.whoami` | 查看自己的平台 ID、Koishi 权限等级、绑定状态 | 所有人 |
+| `dsu.whoami` | 查看自己的平台 ID、权限等级、绑定/默认账号状态 | 所有人 |
 
 主指令别名默认是 `额度`，可以在配置里改。`dsu.bind` 作为旧指令保留，等同 `dsu.add`。
 

@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -10,7 +10,9 @@ import { startOfLocalDay, tzOffsetSeconds } from '../src/utils/time'
 const require = createRequire(import.meta.url)
 const { App } = require('koishi') as typeof import('koishi')
 const mock = require('@koishijs/plugin-mock').default as any
+const memory = require('@koishijs/plugin-database-memory').default as any
 const plugin = require('../lib/index.js') as typeof import('../src/index')
+const { BINDING_TABLE } = require('../lib/account-service.js') as typeof import('../src/account-service')
 
 const TZ = 8 * 3600
 const FULL_KEY = 'sk-abcde0123456789abcdef1234'
@@ -153,6 +155,7 @@ describe('plugin integration', () => {
     app = new App({ baseDir })
     app.baseDir = baseDir
     app.plugin(mock, {})
+    app.plugin(memory, {})
     app.plugin(plugin as any, {
       userToken: 'test-token',
       apiBaseUrl: base,
@@ -162,6 +165,7 @@ describe('plugin integration', () => {
       timeZone: 'Asia/Shanghai',
       adminUsers: [`mock:${ADMIN_ID}`],
       aliases: [],
+      allPageSize: 2,
     })
     await app.start()
     const mockContext = (app as any).mock
@@ -177,7 +181,7 @@ describe('plugin integration', () => {
 
   it('asks an unbound user to add a key first', async () => {
     const replies = await client.receive('dsu')
-    expect(replies.join('\n')).toContain('你还没有添加 API Key')
+    expect(replies.join('\n')).toContain('你还没有绑定 API Key')
   })
 
   it('denies admin commands to normal users', async () => {
@@ -187,13 +191,13 @@ describe('plugin integration', () => {
 
   it('rejects a key that is not in the account', async () => {
     const replies = await client.receive('dsu.add sk-00000aaaaaaaaaaaaaaaaaa0000')
-    expect(replies.join('\n')).toContain('没有在平台账号里找到')
+    expect(replies.join('\n')).toContain('没有在这个账号里找到')
   })
 
   it('adds a key and never stores the full key', async () => {
     const replies = await client.receive(`dsu.add ${FULL_KEY}`)
     expect(replies.join('\n')).toContain('添加成功：示例A')
-    const stored = await readFile(join(baseDir, 'data', 'deepseek-keyusage', 'bindings.json'), 'utf8')
+    const stored = JSON.stringify(await (app as any).database.get(BINDING_TABLE, {}))
     expect(stored).not.toContain(FULL_KEY)
     expect(stored).toContain('sk-abcde**1234')
   })
@@ -240,21 +244,15 @@ describe('plugin integration', () => {
     expect(forKeyOne?.query.get('tz')).toBe(String(TZ))
   })
 
-  it('shows account totals when an admin runs dsu', async () => {
-    const text = (await admin.receive('dsu')).join('\n')
-    expect(text).toContain('账户总用量：')
-    expect(text).toContain('累计花费 ¥3.21')
-    expect(text).toContain('Key 3 个')
-    expect(text).toContain('你还没有添加 API Key')
-  })
-
   it('lets admins see all keys', async () => {
     const text = (await admin.receive('dsu.all')).join('\n')
     expect(text).toContain('DeepSeek 账户总览')
     expect(text).toContain('累计花费 ¥3.21')
     expect(text).toContain('Key 3 个')
     expect(text).toContain('示例A sk-abcde**1234')
-    expect(text).toContain('示例B sk-fghij**5678')
+    expect(text).toContain('第 1/2 页')
+    const page2 = (await admin.receive('dsu.all 2')).join('\n')
+    expect(page2).toContain('第 2/2 页')
   })
 
   it('lets admins query one key by name', async () => {
@@ -267,16 +265,29 @@ describe('plugin integration', () => {
     expect(text).toContain('平台：mock')
     expect(text).toContain(`用户 ID：${USER_ID}`)
     expect(text).toContain('管理员：否')
-    expect(text).toContain('绑定：2 个（示例A、示例B）')
+    expect(text).toContain('绑定：2 个 Key · 1 个账号')
+  })
+
+  it('binds a second account for the same user', async () => {
+    const text = (await client.receive('dsu.add 1234 test-token-2')).join('\n')
+    expect(text).toContain('添加成功：示例A')
+    expect(text).toContain('3 个 Key')
+    const all = (await client.receive('dsu')).join('\n')
+    expect(all).toContain('账号：账号1')
+    expect(all).toContain('账号：账号2')
+    const second = (await client.receive('dsu 账号2')).join('\n')
+    expect(second).toContain('账号：账号2')
+    expect(second).toContain('API-1：sk-abcde**1234')
   })
 
   it('removes one key and then all remaining keys', async () => {
     expect((await client.receive('dsu.remove 示例B')).join('\n')).toContain('已移除：示例B')
     const text = (await client.receive('dsu')).join('\n')
     expect(text).toContain('API-1：sk-abcde**1234')
-    expect(text).not.toContain('API-2')
-    expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 1 个 Key')
-    expect((await client.receive('dsu')).join('\n')).toContain('你还没有添加 API Key')
+    expect(text).not.toContain('名称：示例B')
+    expect(text).toContain('账号：账号2')
+    expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 2 个 Key')
+    expect((await client.receive('dsu')).join('\n')).toContain('你还没有绑定 API Key')
   })
 
   it('binds by key suffix using the spaced dsu add syntax', async () => {

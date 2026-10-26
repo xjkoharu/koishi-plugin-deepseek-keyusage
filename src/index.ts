@@ -1,24 +1,28 @@
-import { Context } from 'koishi'
+import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import type { Context } from 'koishi'
 import { Config } from './config'
-import { PlatformClient } from './api/client'
+import { AccountService, BINDING_TABLE, USER_TABLE } from './account-service'
 import { OfficialClient } from './api/official'
-import { BindingStore } from './store'
-import { UsageService } from './service'
 import { applyCommands } from './commands'
-import { TokenManager, defaultTokenFile, isLoopback, upsertEnvToken } from './token'
+import { BindingStore } from './store'
+import { TokenManager, defaultTokenFile, isLoopback, readTokenFile, upsertEnvToken } from './token'
 import { copyToClipboard } from './clipboard'
 
 export const name = 'deepseek-keyusage'
+export const inject = ['database']
 
 export const usage = `
 在 QQ 里查询 DeepSeek API Key 的余额、花费和 Token 用量。
 
-**平台 Token**：点配置项里的「从本机一键读取Token」，会自动读取本机 Edge/Chrome 的登录态，填入配置、写入环境变量并复制到剪贴板。也可以手动粘贴。
+**多账号**：每个平台账号（userToken）可以绑定多个 Key；一个人也可以绑定多个账号下的 Key。
 
-私聊机器人发送 \`dsu.add sk-...\` 添加自己的 Key（可以多个），之后发 \`dsu\` 就能查。
+第一次使用：私聊机器人发 \`dsu.token\` 设置当前账号（不填 token 会读取 bot 所在电脑的浏览器），然后发 \`dsu.add 25f0\` 绑定 Key。
+也可以直接发 \`dsu.add 25f0 你的userToken\` 绑定另一个账号；\`dsu add 25f0\` 是同样的空格写法。
 
-注意：平台 Token 等同于账号登录态，不要外传。
+管理员：\`dsu.all [页码]\` 跨所有账号分页查看，\`dsu.key <名字>\` 查任意 Key。
+
+注意：userToken 等同于账号登录态，不要外传。
 `
 
 export { Config }
@@ -62,7 +66,6 @@ function refererPath(referer: string | undefined): string {
   }
 }
 
-/** 直接按插件实例 ID 拼出配置页地址，避免 Referer 被 Markdown 链接的 no-referrer 丢掉。 */
 function pluginPagePath(loader: any, referer?: string): string {
   const entry = findPluginEntry(loader?.config?.plugins)
   if (entry) {
@@ -73,9 +76,36 @@ function pluginPagePath(loader: any, referer?: string): string {
   return refererPath(referer)
 }
 
+function defineModels(ctx: Context): void {
+  ctx.model.extend(
+    BINDING_TABLE,
+    {
+      id: 'string',
+      userId: 'string',
+      token: 'string',
+      trackingId: 'string',
+      keyName: 'string',
+      sensitiveId: 'string',
+      boundAt: 'unsigned',
+    },
+    { primary: 'id' },
+  )
+  ctx.model.extend(
+    USER_TABLE,
+    {
+      userId: 'string',
+      token: 'string',
+      updatedAt: 'unsigned',
+    },
+    { primary: 'userId' },
+  )
+}
+
 export function apply(ctx: Context, config: Config) {
   const logger = ctx.logger('deepseek-keyusage')
   const tokenFile = defaultTokenFile(ctx.baseDir)
+  defineModels(ctx)
+
   const tokens = new TokenManager({
     configToken: config.userToken,
     envToken: process.env.DEEPSEEK_PLATFORM_TOKEN,
@@ -90,41 +120,63 @@ export function apply(ctx: Context, config: Config) {
     ? (message: string, detail?: unknown) => logger.info(message, detail ?? '')
     : undefined
 
-  const client = new PlatformClient({
-    baseUrl: config.apiBaseUrl,
-    token: '',
-    tokenProvider: () => tokens.getToken(),
-    timeZone: config.timeZone,
-    timeout: config.requestTimeout,
-    debug,
-  })
   const verifier = new OfficialClient({
     baseUrl: config.officialBaseUrl,
     timeout: config.requestTimeout,
   })
-  const store = new BindingStore(path.join(ctx.baseDir, 'data', 'deepseek-keyusage', 'bindings.json'), logger)
-  const service = new UsageService({
-    client,
+
+  const service = new AccountService({
+    ctx,
+    config,
     verifier,
-    store,
-    config: {
-      currency: config.currency,
-      timeZone: config.timeZone,
-      cacheTtl: config.cacheTtl,
-      maxKeys: config.maxKeys,
-      maxBindings: config.maxBindings,
-    },
+    fallbackToken: () => tokens.getToken().then((token) => token || undefined),
     logger,
+    debug,
   })
 
-  void store.ready().catch((error) => logger.warn(error))
-  // 提前解析 Token：手动配置会立即返回，留空时会在后台尝试扫描浏览器
+  applyCommands(ctx, service, config, logger)
   void tokens.getToken().catch((error) => logger.warn(error))
 
-  applyCommands(ctx, service, config, logger)
+  // 旧版是「全局 token + JSON 绑定」；升级后自动迁移成带 token 的绑定。
+  ctx.on('ready', async () => {
+    try {
+      const existing = await ctx.database.get(BINDING_TABLE, {})
+      if (existing.length) return
 
-  // 控制台配置页里的「从本机一键读取 Token」动作：
-  // 读取 → 写回 koishi.yml → 写 .env → 复制到剪贴板 → 跳回配置页，不渲染任何页面。
+      const token =
+        config.userToken?.trim() ||
+        (await readTokenFile(tokenFile).catch(() => '')) ||
+        process.env.DEEPSEEK_PLATFORM_TOKEN?.trim()
+      if (!token) return
+
+      const file = path.join(ctx.baseDir, 'data', 'deepseek-keyusage', 'bindings.json')
+      const store = new BindingStore(file, logger)
+      await store.ready()
+      const entries = store.list()
+      if (!entries.length) return
+
+      for (const [userId, bindings] of entries) {
+        for (const binding of bindings) {
+          await ctx.database.create(BINDING_TABLE, {
+            id: `${userId}:${binding.trackingId}`,
+            userId,
+            token,
+            trackingId: binding.trackingId,
+            keyName: binding.name,
+            sensitiveId: binding.sensitiveId,
+            boundAt: binding.boundAt || Date.now(),
+          })
+        }
+        await service.setDefaultToken(userId, token)
+      }
+      await fs.rename(file, `${file}.migrated`).catch(() => undefined)
+      logger.info(`已迁移 ${entries.length} 个用户的旧绑定`)
+    } catch (error) {
+      logger.warn?.(`迁移旧绑定失败：${(error as Error).message}`)
+    }
+  })
+
+  // 控制台配置页的「从本机一键读取Token」仍然保留：写回配置、.env 和剪贴板。
   ;(ctx as any).inject(['server'], (ctx: any) => {
     const server = ctx.server
     if (!server?.get) return
@@ -149,7 +201,6 @@ export function apply(ctx: Context, config: Config) {
         return
       }
 
-      // 1) 写回运行中的配置和 koishi.yml
       try {
         config.userToken = token
         const entry = findPluginEntry(loader?.config?.plugins)
@@ -161,7 +212,6 @@ export function apply(ctx: Context, config: Config) {
         logger.warn?.(`写入插件配置失败：${(error as Error).message}`)
       }
 
-      // 2) 写入 .env 并更新当前进程环境变量
       try {
         process.env.DEEPSEEK_PLATFORM_TOKEN = token
         await upsertEnvToken(path.join(ctx.baseDir, '.env'), token)
@@ -169,7 +219,6 @@ export function apply(ctx: Context, config: Config) {
         logger.warn?.(`写入 .env 失败：${(error as Error).message}`)
       }
 
-      // 3) 复制到系统剪贴板（bot 和浏览器在同一台电脑时可用）
       const copied = await copyToClipboard(token)
       if (!copied) logger.debug?.('复制到剪贴板失败，已跳过')
 
