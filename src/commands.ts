@@ -7,6 +7,7 @@ import { BindError } from './service'
 import { isAdminUser } from './permissions'
 import {
   buildQQKeyboard,
+  flattenText,
   renderAllPage,
   renderBindingList,
   renderBindingListMarkdown,
@@ -54,7 +55,7 @@ function describeError(error: unknown): string {
   if (isPlatformError(error)) {
     switch (error.kind) {
       case 'auth':
-        return '这个账号的 Token 失效了，请发送 dsu login {备注名} 重新读取，或 dsu add {Key尾号} {新userToken} {备注名} 重新绑定账号。'
+        return '这个账号的 Token 失效了，发 dsu login {备注名} 重新绑定。'
       case 'config':
         return '还没有配置这个账号的 Token。'
       case 'rate-limit':
@@ -76,7 +77,6 @@ const NO_ACCOUNT_MESSAGE = [
   '你还没有绑定账号。',
   'dsu login {备注名} · 读 bot 本机浏览器',
   'dsu login {userToken} {备注名} · 或直接粘贴 userToken',
-  '绑定后发 dsu 就能看账号总用量。',
 ].join('\n')
 
 const HELP_TEXT = [
@@ -208,11 +208,6 @@ export function applyCommands(
   const isElement = (value: unknown): value is h =>
     !!value && typeof value === 'object' && typeof (value as any).type === 'string'
 
-  const elementText = (element: h): string =>
-    element.children
-      .map((child) => (typeof child === 'string' ? child : elementText(child as h)))
-      .join('')
-
   /**
    * 群聊回复统一处理：引用原消息 + @ 调用者。
    * QQ 的 markdown 消息里 @ 要用 `<qqbot-at-user>`，纯文本用 at 元素。
@@ -228,7 +223,7 @@ export function applyCommands(
     if (config.replyAt && session.userId) {
       if (isElement(body) && body.type.startsWith('qq:rawmarkdown')) {
         const attrs = (body.attrs ?? {}) as Record<string, any>
-        const text = typeof attrs.content === 'string' ? attrs.content : elementText(body)
+        const text = typeof attrs.content === 'string' ? attrs.content : flattenText(body)
         body = h(body.type, { ...attrs, content: `<qqbot-at-user id="${session.userId}"/> ${text}` })
       } else if (typeof body === 'string') {
         body = [h.at(session.userId), ' ', body]
@@ -389,11 +384,7 @@ export function applyCommands(
     const key = userKey(session)!
     const { binding, count } = await service.addBinding(key, token, rawKey, args.name)
     const lines = [`添加成功：${binding.keyName}（${shortMask(binding.sensitiveId)}）`]
-    lines.push(
-      count > 1
-        ? `你现在绑定了 ${count} 个 Key，发送 dsu 查看全部明细。`
-        : '以后直接发 dsu 就能查用量了。',
-    )
+    if (count > 1) lines.push(`已绑定 ${count} 个 Key。`)
     const recalled = await recallSecret(session)
     if (recalled) lines.push(recalled)
     else if (session.guildId) lines.push('建议撤回刚才那条包含 Token / Key 的消息。')
@@ -434,7 +425,7 @@ export function applyCommands(
       const label = name ? `（${scrubSecrets(name)}）` : ''
       return [
         `账号已保存：${maskToken(scanned)}${label}`,
-        '现在可以直接发 dsu 查看账号总用量，再发 dsu add {Key尾号} {备注名} 看单个 Key 的明细。',
+        '发 dsu 看账号总用量，dsu add 绑 Key。',
         recalled,
       ]
         .filter(Boolean)
@@ -447,7 +438,7 @@ export function applyCommands(
     const label = name ? `（${scrubSecrets(name)}）` : ''
     return [
       `账号已保存：${maskToken(token)}${label}`,
-      '现在可以直接发 dsu 查看账号总用量，再发 dsu add {Key尾号} {备注名} 看单个 Key 的明细。',
+      '发 dsu 看账号总用量，dsu add 绑 Key。',
       recalled,
     ]
       .filter(Boolean)
@@ -457,15 +448,13 @@ export function applyCommands(
   /** 只解绑 Key：账号保留，还能继续看账号总用量。 */
   const unbindAll = async (session: Session) => {
     const count = await service.clearBindings(userKey(session)!)
-    return count
-      ? `已解绑全部 ${count} 个 Key（账号保留，发 dsu 还能看账号总用量）。`
-      : '你还没有绑定任何 Key。'
+    return count ? `已解绑全部 ${count} 个 Key（账号还在）。` : '你还没有绑定任何 Key。'
   }
 
   const removeKey = async (session: Session, query: string, viaUnbind = false) => {
     const binding = await service.removeBinding(userKey(session)!, query)
     const lines = [`已移除：${binding.keyName}（${shortMask(binding.sensitiveId)}）`]
-    if (viaUnbind) lines.push('dsu unbind 不带参数才会解绑全部 Key；退出账号用 dsu logout。')
+    if (viaUnbind) lines.push('退出账号用 dsu logout。')
     return lines.join('\n')
   }
 

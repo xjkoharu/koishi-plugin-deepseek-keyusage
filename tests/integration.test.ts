@@ -370,7 +370,7 @@ describe('plugin integration', () => {
 
     const unbound = (await client.receive('dsu unbind 示例A')).join('\n')
     expect(unbound).toContain('已移除：示例A')
-    expect(unbound).toContain('dsu unbind 不带参数')
+    expect(unbound).toContain('退出账号用 dsu logout')
 
     expect((await client.receive('dsu remove 示例B')).join('\n')).toContain('已移除：示例B')
     expect((await client.receive('dsu list')).join('\n')).toContain('你还没有绑定 Key')

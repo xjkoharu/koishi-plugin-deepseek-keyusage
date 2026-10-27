@@ -27,6 +27,18 @@ export interface QuickButton {
 }
 
 /**
+ * 取消息元素里的纯文本。
+ * 注意 Koishi 的 h() 会把字符串子节点包成 { type: 'text', attrs: { content } }，
+ * 所以必须读 attrs.content，否则会拿到空串。
+ */
+export function flattenText(element: any): string {
+  if (typeof element === 'string') return element
+  if (!element || typeof element !== 'object') return ''
+  if (element.type === 'text') return String(element.attrs?.content ?? '')
+  return (element.children ?? []).map(flattenText).join('')
+}
+
+/**
  * QQ 官方机器人（adapter-qq-crack）的按钮键盘：
  * 点「查看 1」等于把 `dsu 1` 填进输入框（enter=false）或直接发送（enter=true）。
  */
@@ -363,13 +375,10 @@ export function renderKeyCatalog(views: AccountView[], options: RenderOptions, m
     lines.push(`……还有 ${views.length - shown.length} 个账号未展示，发送 dsu keys {账号备注} 单独查看。`)
   }
 
-  if (hasUnbound) {
+  // markdown 里每行已经有「绑定」按钮，不用再解释一遍
+  if (hasUnbound && !markdown) {
     lines.push('')
-    lines.push(
-      markdown
-        ? `没绑定的 Key 点「绑定」就行，或者 ${link('dsu add', '快捷绑定')}。`
-        : '没绑定的 Key 用 dsu add {Key尾号} 绑定，之后就能在 dsu 里看明细。',
-    )
+    lines.push('没绑定的 Key 用 dsu add {Key尾号} 绑定，之后就能在 dsu 里看明细。')
   }
 
   lines.push('')

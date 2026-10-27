@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createRequire } from 'node:module'
 import {
   buildQQKeyboard,
   cmdInput,
+  flattenText,
   registerRenderer,
   renderBindingListMarkdown,
   renderOverview,
@@ -14,6 +16,10 @@ import {
   type RenderOptions,
 } from '../src/render'
 import type { AccountView } from '../src/account-service'
+
+// vitest 的 ESM 转换会破坏 koishi 的类继承，用 CJS 版本加载
+const require = createRequire(import.meta.url)
+const { h } = require('koishi') as typeof import('koishi')
 import type { AccountOverview, ApiKeyInfo, Report } from '../src/types'
 
 const options: RenderOptions = {
@@ -266,6 +272,18 @@ describe('cmdInput', () => {
   it('respects a custom prefix', () => {
     expect(cmdInput('dsu 1', '详情', '')).toContain('text="dsu 1"')
     expect(cmdInput('dsu 1', '详情', '.')).toContain('text=".dsu 1"')
+  })
+})
+
+describe('flattenText', () => {
+  it('reads the text Koishi wraps into attrs.content', () => {
+    const element = h('qq:rawmarkdown-without-keyboard', {}, 'hello world')
+    expect(flattenText(element)).toBe('hello world')
+  })
+
+  it('handles plain strings and nested elements', () => {
+    expect(flattenText('abc')).toBe('abc')
+    expect(flattenText(h('message', {}, [h('quote', { id: '1' }), h('text', { content: '正文' })]))).toBe('正文')
   })
 })
 
