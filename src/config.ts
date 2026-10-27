@@ -29,6 +29,16 @@ export interface Config {
   showBalance: boolean
   /** QQ 平台使用 Markdown 消息 */
   qqMarkdown: boolean
+  /** QQ 官方机器人消息里带「查看 N」按钮 */
+  qqKeyboard: boolean
+  /** 点按钮直接发送（false = 只填进输入框） */
+  qqButtonEnter: boolean
+  /** 内联指令的前缀，默认 `/` */
+  commandPrefix: string
+  /** 群里回复时 @ 调用者 */
+  replyAt: boolean
+  /** 群里回复时引用原消息 */
+  replyQuote: boolean
   /** 主指令的额外别名 */
   aliases: string[]
   /** 管理员总览最多展示多少个 Key */
@@ -58,7 +68,7 @@ export const Config: Schema<Config> = Schema.object({
         '手动获取：登录 platform.deepseek.com → F12 → Application → Local Storage → `https://platform.deepseek.com` → 复制 `userToken` 的值。',
         '留空时插件会自动尝试读取本机浏览器，也会读取环境变量 `DEEPSEEK_PLATFORM_TOKEN`。',
         '',
-        '这是插件默认使用的平台账号；`dsu.add` 只发 Key 尾号时，会在这个账号的 Key 列表里匹配。',
+        '旧版是全局 Token，现在仅用于旧数据迁移和控制台一键读取；新账号请用 `dsu login` 绑定。',
       ].join('\n'),
     ),
   autoReadToken: Schema.boolean()
@@ -91,6 +101,23 @@ export const Config: Schema<Config> = Schema.object({
   qqMarkdown: Schema.boolean()
     .default(true)
     .description('QQ 消息使用 Markdown 渲染（如果不支持 Markdown 就关掉）。'),
+  qqKeyboard: Schema.boolean()
+    .default(false)
+    .description(
+      '在 QQ 消息底部加一排键盘按钮（查看 1 / 查看 2 …）。默认关：消息正文里已经有「详情 / 快捷绑定」内联按钮，够了。',
+    ),
+  qqButtonEnter: Schema.boolean()
+    .default(false)
+    .description('点按钮后直接发送指令；关掉（默认）只把指令填进输入框，自己再按发送。'),
+  commandPrefix: Schema.string()
+    .default('/')
+    .description('内联按钮里填的指令前缀，默认 `/`（和 QQ 的标准指令写法一致）。如果你的 bot 没配 `/` 前缀，就改成空字符串。'),
+  replyAt: Schema.boolean()
+    .default(true)
+    .description('群聊里回复时 @ 一下调用者，避免刷屏时看不出在回谁。'),
+  replyQuote: Schema.boolean()
+    .default(true)
+    .description('群聊里回复时引用原消息。如果 QQ 报消息发送失败，先把这个关掉。'),
   aliases: Schema.array(Schema.string())
     .default(['额度'])
     .role('table')
@@ -117,6 +144,11 @@ export const DEFAULT_CONFIG: Config = {
   autoRecallInGroup: true,
   showBalance: true,
   qqMarkdown: true,
+  qqKeyboard: false,
+  qqButtonEnter: false,
+  commandPrefix: '/',
+  replyAt: true,
+  replyQuote: true,
   aliases: ['额度'],
   maxKeys: 30,
   maxBindings: 5,

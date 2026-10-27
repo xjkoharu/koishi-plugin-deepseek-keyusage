@@ -18,7 +18,8 @@ import type {
   Stat,
   UserSummary,
 } from './types'
-import { matchesMaskedKey, shortMask } from './utils/format'
+import { isPlatformError } from './api/errors'
+import { looksLikeApiKey, matchesMaskedKey, scrubSecrets, shortMask, stripSecrets } from './utils/format'
 import { DAY_SECONDS, localDayIndex, startOfLocalDay, tzOffsetSeconds } from './utils/time'
 
 export const BINDING_TABLE = 'deepseek_keyusage_binding'
@@ -35,6 +36,25 @@ export interface StoredBinding {
   keyName: string
   sensitiveId: string
   boundAt: number
+}
+
+/**
+ * 用户输入的「Key 标识」是否命中这个 Key：
+ * 支持 Key 后四位（脱敏串后缀）、完整 sk- Key、Key 名字、tracking_id 前缀。
+ */
+export function matchesKeyQuery(key: ApiKeyInfo, query: string): boolean {
+  const text = query.trim()
+  if (!text) return false
+  if (looksLikeApiKey(text)) return matchesMaskedKey(text, key.sensitiveId)
+  const q = text.toLowerCase()
+  const sensitive = (key.sensitiveId || '').toLowerCase()
+  const tracking = (key.trackingId || '').toLowerCase()
+  const name = (key.name || '').toLowerCase()
+  return (
+    (!!sensitive && sensitive.endsWith(q)) ||
+    (!!tracking && tracking.startsWith(q)) ||
+    (!!name && (name === q || name.includes(q)))
+  )
 }
 
 export interface StoredUser {
@@ -161,6 +181,10 @@ export class AccountService {
     try {
       return await this.keys(text, true)
     } catch (error) {
+      // 网络问题不等于 Token 失效，分开说，不然用户会白换一次 Token
+      if (isPlatformError(error) && error.kind === 'network') {
+        throw new BindError(error.message)
+      }
       throw new BindError(`Token 无效或已过期：${(error as Error).message}`)
     }
   }
@@ -181,7 +205,11 @@ export class AccountService {
 
   async accounts(userId: string): Promise<StoredAccount[]> {
     const rows: any[] = await this.db.get(ACCOUNT_TABLE, { userId })
-    return rows.sort((a, b) => a.createdAt - b.createdAt) as StoredAccount[]
+    return (rows.sort((a, b) => a.createdAt - b.createdAt) as StoredAccount[]).map((account, index) => ({
+      ...account,
+      // 历史数据里备注名可能混进过 token，读出来时再兜一次底
+      name: stripSecrets(account.name) || `账号${index + 1}`,
+    }))
   }
 
   /** 新账号必须带备注；已有账号直接复用（renameExisting 为 true 时才改名）。 */
@@ -192,9 +220,9 @@ export class AccountService {
     renameExisting = false,
   ): Promise<StoredAccount> {
     const accountToken = token.trim()
+    const label = stripSecrets(name ?? '')
     const rows: any[] = await this.db.get(ACCOUNT_TABLE, { userId, token: accountToken })
     if (rows[0]) {
-      const label = name?.trim()
       if (renameExisting && label && rows[0].name !== label) {
         await this.db.set(ACCOUNT_TABLE, { id: rows[0].id }, { name: label, updatedAt: Date.now() })
         return { ...rows[0], name: label }
@@ -202,10 +230,9 @@ export class AccountService {
       return rows[0] as StoredAccount
     }
 
-    const label = name?.trim()
     if (!label) {
       throw new BindError(
-        '第一次绑定这个账号，需要加一个备注名，例如：dsu.add <Key尾号> <备注名> 或 dsu.token <userToken> <备注名>。',
+        '第一次绑定这个账号，要给它起个备注名。比如：dsu login {userToken} 主号 —— 第一个参数是 userToken，第二个是要用的备注名。',
       )
     }
     const sameName: any[] = await this.db.get(ACCOUNT_TABLE, { userId, name: label })
@@ -226,12 +253,12 @@ export class AccountService {
   }
 
   async renameAccount(userId: string, query: string, name: string): Promise<StoredAccount> {
-    const label = name.trim()
+    const label = stripSecrets(name)
     if (!label) throw new BindError('备注不能为空。')
     const bindings = await this.bindings(userId)
     const labels = await this.labelsForUser(userId, bindings)
-    const target = [...labels.entries()].find(([, value]) => value.toLowerCase() === query.trim().toLowerCase())
-    if (!target) throw new BindError(`没有找到账号「${query}」。`)
+    const target = [...labels.entries()].find(([, value]) => value.toLowerCase() === stripSecrets(query).toLowerCase())
+    if (!target) throw new BindError(`没有找到账号「${scrubSecrets(query)}」。`)
     const token = target[0]
     const account = await this.ensureAccount(userId, token)
     const sameName: any[] = await this.db.get(ACCOUNT_TABLE, { userId, name: label })
@@ -274,11 +301,9 @@ export class AccountService {
 
     let keys = await this.keys(accountToken)
     const candidate = rawKey.trim()
-    const suffixOnly = /^[A-Za-z0-9]{4,32}$/.test(candidate) && !candidate.startsWith('sk-')
-    const matcher = (key: ApiKeyInfo) =>
-      suffixOnly
-        ? key.sensitiveId.toLowerCase().endsWith(candidate.toLowerCase())
-        : matchesMaskedKey(candidate, key.sensitiveId)
+    const fullKey = looksLikeApiKey(candidate)
+    // 可以按「Key 后四位 / 完整 Key / Key 名字 / tracking_id 前缀」任一种绑定
+    const matcher = (key: ApiKeyInfo) => matchesKeyQuery(key, candidate)
 
     let matches = keys.filter(matcher)
     if (!matches.length) {
@@ -286,24 +311,32 @@ export class AccountService {
       matches = keys.filter(matcher)
     }
     if (!matches.length) {
+      const list = keys
+        .slice(0, 10)
+        .map((key) => key.name || key.trackingId)
+        .join('、')
       throw new BindError(
-        suffixOnly
-          ? `没有在这个账号里找到尾号「${candidate}」的 Key，确认一下尾号，或者这个 Key 是不是这个账号下的。`
-          : '没有在这个账号里找到这个 Key，确认一下是不是复制完整了，或者它是不是这个账号下的 Key。',
+        [
+          `没有在这个账号里找到「${scrubSecrets(candidate)}」对应的 Key。`,
+          list ? `这个账号下的 Key：${list}` : '',
+          '可以发 Key 后四位、完整 Key、Key 名字，或者它的 ID 前缀。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
       )
     }
     if (matches.length > 1) {
       const names = matches
-        .map((key) => `${key.name || key.trackingId}（${shortMask(key.sensitiveId)}）`)
+        .map((key) => `${key.name || key.trackingId}（${shortMask(key.sensitiveId) || key.trackingId}）`)
         .join('、')
-      throw new BindError(`「${candidate}」同时匹配到多个 Key：${names}，请多写几位尾号。`)
+      throw new BindError(`「${scrubSecrets(candidate)}」同时匹配到多个 Key：${names}，请写具体一点。`)
     }
 
     const key = matches[0]
     if (current.some((item) => item.token === accountToken && item.trackingId === key.trackingId)) {
       throw new BindError('你已经绑定过这个 Key 了，直接发 dsu 就能查。')
     }
-    if (!suffixOnly) await this.options.verifier.getBalance(candidate)
+    if (fullKey) await this.options.verifier.getBalance(candidate)
 
     const binding: StoredBinding = {
       id: randomUUID(),
@@ -340,8 +373,8 @@ export class AccountService {
 
   async removeBinding(userId: string, query: string): Promise<StoredBinding> {
     const matches = await this.matchBindings(userId, query)
-    if (!matches.length) throw new BindError(`没有找到「${query}」对应的 Key。`)
-    if (matches.length > 1) throw new BindError(`「${query}」匹配到多个 Key，请写完整一点。`)
+    if (!matches.length) throw new BindError(`没有找到「${scrubSecrets(query)}」对应的 Key。`)
+    if (matches.length > 1) throw new BindError(`「${scrubSecrets(query)}」匹配到多个 Key，请写完整一点。`)
     await this.db.remove(BINDING_TABLE, { id: matches[0].id })
     return matches[0]
   }
@@ -362,14 +395,14 @@ export class AccountService {
     query?: string,
   ): Promise<{ account: StoredAccount; keys: number; next?: StoredAccount }> {
     const accounts = await this.accounts(userId)
-    if (!accounts.length) throw new BindError('你还没有绑定账号。发送 dsu.login <备注名> 添加一个。')
+    if (!accounts.length) throw new BindError('你还没有绑定账号。发送 dsu login {备注名} 添加一个。')
 
     const label = query?.trim().toLowerCase()
     let target: StoredAccount | undefined
     if (label) {
       target = accounts.find((item) => item.name.toLowerCase() === label)
       if (!target) {
-        throw new BindError(`没有找到账号「${query}」。发送 dsu.account list 查看账号备注。`)
+        throw new BindError(`没有找到账号「${scrubSecrets(query!)}」。发送 dsu.account list 查看账号备注。`)
       }
     } else {
       const token = await this.defaultToken(userId)
@@ -478,7 +511,7 @@ export class AccountService {
     const accounts = (await this.db.get(ACCOUNT_TABLE, {})) as StoredAccount[]
     const names = new Map<string, string>()
     for (const account of accounts) {
-      if (!names.has(account.token)) names.set(account.token, account.name)
+      if (!names.has(account.token)) names.set(account.token, stripSecrets(account.name) || `账号${names.size + 1}`)
     }
     const map = new Map<string, string>()
     for (const binding of bindings) {
@@ -517,6 +550,24 @@ export class AccountService {
         })
       }
     }
+  }
+
+  /** 老数据里可能把 token 混进了账号备注，启动时清一次（备注名会原样显示在聊天里）。 */
+  async sanitizeAccountNames(): Promise<number> {
+    const rows = ((await this.db.get(ACCOUNT_TABLE, {})) as StoredAccount[]).sort(
+      (a, b) => a.createdAt - b.createdAt,
+    )
+    const counters = new Map<string, number>()
+    let fixed = 0
+    for (const row of rows) {
+      const index = (counters.get(row.userId) ?? 0) + 1
+      counters.set(row.userId, index)
+      const clean = stripSecrets(row.name) || `账号${index}`
+      if (clean === row.name) continue
+      await this.db.set(ACCOUNT_TABLE, { id: row.id }, { name: clean, updatedAt: Date.now() })
+      fixed += 1
+    }
+    return fixed
   }
 
   async reportKey(token: string, key: ApiKeyInfo, label?: string): Promise<Report> {

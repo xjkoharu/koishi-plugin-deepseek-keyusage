@@ -81,3 +81,26 @@ export function looksLikeApiKey(key: string): boolean {
 export function looksLikeKeySuffix(value: string): boolean {
   return /^[A-Za-z0-9]{4,32}$/.test(value.trim())
 }
+
+/** 一串字符像不像 userToken / 完整 Key：32 位以上的无空格串，且同时有字母和数字。 */
+const SECRET_LIKE = /[A-Za-z0-9+/=_-]{32,}/g
+
+function isSecretLike(value: string): boolean {
+  return value.length >= 32 && /\d/.test(value) && /[A-Za-z]/.test(value)
+}
+
+/** 把混在文本里的 Token / 完整 Key 打码，避免在聊天里回显。 */
+export function scrubSecrets(text: string): string {
+  return String(text).replace(SECRET_LIKE, (match) =>
+    isSecretLike(match) ? `${match.slice(0, 4)}***${match.slice(-4)}` : match,
+  )
+}
+
+/** 直接去掉文本里的 Token / 完整 Key 片段，账号备注清洗用。 */
+export function stripSecrets(text: string): string {
+  return String(text)
+    .replace(SECRET_LIKE, (match) => (isSecretLike(match) ? ' ' : match))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+

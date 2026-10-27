@@ -102,6 +102,8 @@ export interface Report {
   updatedAt: number
   /** 多账号展示用：账号1、账号2 */
   accountLabel?: string
+  /** 在用户绑定列表里的序号（dsu <序号> 用） */
+  number?: number
 }
 
 export interface KeyOverview {

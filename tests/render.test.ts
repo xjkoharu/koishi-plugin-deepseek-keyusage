@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildQQKeyboard,
+  cmdInput,
   registerRenderer,
   renderBindingListMarkdown,
   renderOverview,
@@ -139,23 +141,25 @@ describe('renderUserView', () => {
     updatedAt: report.updatedAt,
   }
 
-  it('shows account totals and the bound key details', () => {
-    const views: AccountView[] = [{ label: '主号', overview, reports: [report] }]
+  it('shows account totals and a one-line summary per bound key', () => {
+    const views: AccountView[] = [{ label: '主号', overview, reports: [{ ...report, number: 1 }] }]
     const text = renderUserView(views, options)
-    expect(text).toContain('DeepSeek API用量：')
+    expect(text).toContain('DeepSeek API用量')
     expect(text).toContain('账号：主号')
     expect(text).toContain('  余额 ¥12.50（赠金 ¥2.50 / 充值 ¥10.00） · 累计花费 ¥3.21 · 累计 Token 187')
-    expect(text).toContain('  今日花费 ¥0.040 · 今日 Token 34 · Key 2 个 · 已绑定 1 个')
-    expect(text).toContain('API-1：sk-abcde**1234')
+    expect(text).toContain('  今日花费 ¥0.040 · 今日 Token 34 · Key 2 个')
+    expect(text).toContain('1. 示例A · sk-abcde**1234 · 今日 ¥0.020 · 累计 ¥0.030')
+    expect(text).toContain('（账号里还有 1 个 Key 没绑定）')
+    expect(text).toContain('发送 dsu {序号}')
   })
 
   it('keeps the account totals when nothing is bound', () => {
-    const views: AccountView[] = [{ label: '主号', overview, reports: [] }]
+    const views: AccountView[] = [{ label: '主号', overview: { ...overview, keys: [] }, reports: [] }]
     const text = renderUserView(views, options)
     expect(text).toContain('账号：主号')
     expect(text).toContain('累计花费 ¥3.21')
     expect(text).toContain('还没有绑定 Key')
-    expect(text).not.toContain('API-1')
+    expect(text).not.toContain('发送 dsu {序号}')
   })
 })
 
@@ -227,6 +231,41 @@ describe('markdown renderers', () => {
     )
     expect(text).toContain('# 我绑定的 Key')
     expect(text).toContain('1. **示例A** `sk-abcde**1234`')
+  })
+})
+
+describe('buildQQKeyboard', () => {
+  it('builds a button that fills the command into the input box', () => {
+    const keyboard = buildQQKeyboard([{ label: '查看 1', command: 'dsu 1' }])
+    const button = keyboard.content.rows[0].buttons[0]
+    expect(button.render_data.label).toBe('查看 1')
+    expect(button.action.type).toBe(2)
+    expect(button.action.data).toBe('dsu 1')
+    expect(button.action.enter).toBe(false)
+    expect(button.action.permission).toEqual({ type: 2 })
+  })
+
+  it('can send directly and wraps after five buttons', () => {
+    const buttons = Array.from({ length: 7 }, (_, index) => ({
+      label: `查看 ${index + 1}`,
+      command: `dsu ${index + 1}`,
+    }))
+    const keyboard = buildQQKeyboard(buttons, true)
+    expect(keyboard.content.rows).toHaveLength(2)
+    expect(keyboard.content.rows[0].buttons).toHaveLength(5)
+    expect(keyboard.content.rows[1].buttons).toHaveLength(2)
+    expect(keyboard.content.rows[0].buttons[0].action.enter).toBe(true)
+  })
+})
+
+describe('cmdInput', () => {
+  it('fills a slash-prefixed command by default', () => {
+    expect(cmdInput('dsu 1', '详情')).toBe('<qqbot-cmd-input text="/dsu 1" show="详情" reference="false"/>')
+  })
+
+  it('respects a custom prefix', () => {
+    expect(cmdInput('dsu 1', '详情', '')).toContain('text="dsu 1"')
+    expect(cmdInput('dsu 1', '详情', '.')).toContain('text=".dsu 1"')
   })
 })
 

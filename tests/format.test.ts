@@ -8,6 +8,8 @@ import {
   looksLikeKeySuffix,
   maskKey,
   matchesMaskedKey,
+  scrubSecrets,
+  stripSecrets,
 } from '../src/utils/format'
 
 describe('looksLikeKeySuffix', () => {
@@ -89,5 +91,24 @@ describe('format helpers', () => {
     expect(formatCompact(999)).toBe('999')
     expect(formatCompact(1234)).toBe('1.2k')
     expect(formatCompact(1234567)).toBe('1.23M')
+  })
+})
+
+describe('secret scrubbing', () => {
+  const token = 'qktmqGsAQXlLaDJOIiBrh56UXaELb/9AosRs7sFET0EzZBWAt2SwU8E9XYgxFnv+'
+
+  it('masks token-like strings inside text', () => {
+    const text = scrubSecrets(`账号：老王 ${token}`)
+    expect(text).not.toContain(token)
+    expect(text).toContain('qktm***')
+  })
+
+  it('strips token-like strings out of labels', () => {
+    expect(stripSecrets(`老王 ${token}`)).toBe('老王')
+    expect(stripSecrets(`主号${token}`)).toBe('主号')
+    expect(stripSecrets(token)).toBe('')
+    expect(stripSecrets('主号')).toBe('主号')
+    // 长英文备注名没有数字，不该被当成 token 清掉
+    expect(stripSecrets('my-super-long-account-name-for-work')).toBe('my-super-long-account-name-for-work')
   })
 })

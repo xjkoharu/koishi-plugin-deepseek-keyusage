@@ -213,11 +213,11 @@ describe('plugin integration', () => {
 
   it('shows every bound key when there are several', async () => {
     const text = (await client.receive('dsu')).join('\n')
-    expect(text).toContain('DeepSeek API用量：')
-    expect(text).toContain('API-1：sk-abcde**1234')
-    expect(text).toContain('API-2：sk-fghij**5678')
-    expect(text).toContain('  名称：示例A')
-    expect(text).toContain('  名称：示例B')
+    expect(text).toContain('DeepSeek API用量')
+    expect(text).toContain('账号：主号')
+    expect(text).toContain('1. 示例A · sk-abcde**1234')
+    expect(text).toContain('2. 示例B · sk-fghij**5678')
+    expect(text).toContain('发送 dsu {序号}')
     expect(text).toContain('更新于：')
   })
 
@@ -273,7 +273,7 @@ describe('plugin integration', () => {
 
   it('lets a group member set a token and bind without private chat', async () => {
     const group = (app as any).mock.client('user-3', 'channel-3')
-    const saved = (await group.receive('dsu.token test-token-3-0123456789abcdef0123456789 群里的号')).join('\n')
+    const saved = (await group.receive('dsu.login test-token-3-0123456789abcdef0123456789 群里的号')).join('\n')
     expect(saved).toContain('账号已保存')
     const bound = (await group.receive('dsu.add 9012')).join('\n')
     expect(bound).toContain('添加成功：示例C')
@@ -289,7 +289,7 @@ describe('plugin integration', () => {
 
   it('shows the account total even without any bound key', async () => {
     const fresh = (app as any).mock.client('user-5', 'channel-5')
-    await fresh.receive('dsu.token test-token-5-0123456789abcdef0123456789 只看账号')
+    await fresh.receive('dsu.login test-token-5-0123456789abcdef0123456789 只看账号')
     const text = (await fresh.receive('dsu')).join('\n')
     expect(text).toContain('DeepSeek API用量')
     expect(text).toContain('账号：只看账号')
@@ -301,7 +301,7 @@ describe('plugin integration', () => {
   it('requires a remark when binding a new account', async () => {
     const third = (app as any).mock.client('user-4')
     const text = (await third.receive('dsu.add 1234 test-token-4-0123456789abcdef0123456789')).join('\n')
-    expect(text).toContain('第一次绑定这个账号，需要加一个备注名')
+    expect(text).toContain('第一次绑定这个账号，要给它起个备注名')
   })
 
   it('binds a second account for the same user', async () => {
@@ -313,7 +313,7 @@ describe('plugin integration', () => {
     expect(all).toContain('账号：朋友的号')
     const second = (await client.receive('dsu 朋友的号')).join('\n')
     expect(second).toContain('账号：朋友的号')
-    expect(second).toContain('API-1：sk-abcde**1234')
+    expect(second).toContain('sk-abcde**1234')
   })
 
   it('lists and renames account remarks', async () => {
@@ -328,8 +328,8 @@ describe('plugin integration', () => {
   it('removes one key and then all remaining keys', async () => {
     expect((await client.receive('dsu.remove 示例B')).join('\n')).toContain('已移除：示例B')
     const text = (await client.receive('dsu')).join('\n')
-    expect(text).toContain('API-1：sk-abcde**1234')
-    expect(text).not.toContain('名称：示例B')
+    expect(text).toContain('sk-abcde**1234')
+    expect(text).not.toContain('示例B')
     expect(text).toContain('账号：备用号')
     expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 2 个 Key')
 
@@ -337,11 +337,11 @@ describe('plugin integration', () => {
     const after = (await client.receive('dsu')).join('\n')
     expect(after).toContain('账号：备用号')
     expect(after).toContain('还没有绑定 Key')
-    expect(after).not.toContain('API-1：')
+    expect(after).not.toContain('sk-abcde**1234')
   })
 
   it('sets a default token via chat and binds a key with it', async () => {
-    const saved = (await privateClient.receive('dsu.token test-token-1-0123456789abcdef0123456789-3-0123456789abcdef0123456789 小号')).join('\n')
+    const saved = (await privateClient.receive('dsu.login test-token-1-0123456789abcdef0123456789-3-0123456789abcdef0123456789 小号')).join('\n')
     expect(saved).toContain('账号已保存')
     const bound = (await privateClient.receive('dsu.add 5678')).join('\n')
     expect(bound).toContain('添加成功：示例B')
@@ -370,7 +370,7 @@ describe('plugin integration', () => {
 
     const unbound = (await client.receive('dsu unbind 示例A')).join('\n')
     expect(unbound).toContain('已移除：示例A')
-    expect(unbound).toContain('dsu.unbind 不带参数')
+    expect(unbound).toContain('dsu unbind 不带参数')
 
     expect((await client.receive('dsu remove 示例B')).join('\n')).toContain('已移除：示例B')
     expect((await client.receive('dsu list')).join('\n')).toContain('你还没有绑定 Key')
@@ -379,6 +379,13 @@ describe('plugin integration', () => {
   it('routes spaced admin subcommands', async () => {
     const text = (await admin.receive('dsu all 1')).join('\n')
     expect(text).toContain('DeepSeek 账户总览（全部）')
+  })
+
+  it('shows the usage cheat sheet', async () => {
+    const text = (await client.receive('dsu help')).join('\n')
+    expect(text).toContain('dsu login {备注名}')
+    expect(text).toContain('dsu unbind {序号/名字}')
+    expect((await client.receive('dsu ?')).join('\n')).toContain('dsu add {Key尾号}')
   })
 
   it('logs out one account and keeps the others', async () => {
@@ -390,5 +397,67 @@ describe('plugin integration', () => {
     expect(list).toContain('小号')
     expect(list).toContain('备用号')
     expect(list).not.toContain('主号')
+  })
+
+  it('never prints the userToken, even when it is typed in the wrong position', async () => {
+    const user = (app as any).mock.client('user-7', 'channel-7')
+    const token = 'test-token-7-0123456789abcdef0123456789'
+
+    expect((await user.receive(`dsu login 主号 ${token}`)).join('\n')).toContain('账号已保存')
+
+    const view = (await user.receive('dsu')).join('\n')
+    expect(view).toContain('账号：主号')
+    expect(view).not.toContain(token)
+
+    expect((await user.receive(`dsu add 9012 ${token} 主号`)).join('\n')).toContain('添加成功：示例C')
+    const list = (await user.receive('dsu account list')).join('\n')
+    expect(list).toContain('- 主号：')
+    expect(list).not.toContain(token)
+    expect((await user.receive('dsu')).join('\n')).not.toContain(token)
+  })
+
+  it('cleans a polluted account name read from the database', async () => {
+    const user = (app as any).mock.client('user-9', 'channel-9')
+    const token = 'test-token-9-0123456789abcdef0123456789'
+    const { ACCOUNT_TABLE } = require('../lib/account-service.js') as typeof import('../src/account-service')
+    await (app as any).database.create(ACCOUNT_TABLE, {
+      id: 'polluted-1',
+      userId: 'mock:user-9',
+      token,
+      name: `老王 ${token}`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    const text = (await user.receive('dsu')).join('\n')
+    expect(text).toContain('账号：老王')
+    expect(text).not.toContain(token)
+  })
+
+  it('lists every key of the account, including the unbound ones', async () => {
+    const user = (app as any).mock.client('user-10', 'channel-10')
+    const token = 'test-token-10-0123456789abcdef0123456789'
+    await user.receive(`dsu login 主号 ${token}`)
+    await user.receive('dsu add 1234')
+
+    const text = (await user.receive('dsu keys')).join('\n')
+    expect(text).toContain('账号下的全部 Key')
+    expect(text).toContain('账号：主号 · 3 个 Key')
+    expect(text).toContain('示例A · sk-abcde**1234')
+    expect(text).toContain('示例B · sk-fghij**5678')
+    expect(text).toContain('已绑定')
+    expect(text).toContain('没绑定的 Key 用 dsu add {Key尾号} 绑定')
+
+    expect((await user.receive('dsu keys 主号')).join('\n')).toContain('账号：主号')
+    expect((await user.receive('dsu keys 不存在')).join('\n')).toContain('没有找到账号')
+  })
+
+  it('asks for the key when only dsu add is sent', async () => {
+    const user = (app as any).mock.client('user-11', 'channel-11')
+    const token = 'test-token-11-0123456789abcdef0123456789'
+    expect((await user.receive(`dsu login 主号 ${token}`)).join('\n')).toContain('账号已保存')
+
+    expect((await user.receive('dsu add')).join('\n')).toContain('要绑哪个 Key')
+    expect((await user.receive('1234')).join('\n')).toContain('添加成功：示例A')
   })
 })

@@ -12,11 +12,45 @@ export interface RenderOptions {
   currency: string
   timeZone: string
   maxKeys: number
+  /** 内联指令前缀，默认 `/`；传空串则不加前缀 */
+  commandPrefix?: string
 }
 
 export interface RendererSet {
   report: (report: Report, options: RenderOptions) => string
   overview: (overview: AccountOverview, options: RenderOptions) => string
+}
+
+export interface QuickButton {
+  label: string
+  command: string
+}
+
+/**
+ * QQ 官方机器人（adapter-qq-crack）的按钮键盘：
+ * 点「查看 1」等于把 `dsu 1` 填进输入框（enter=false）或直接发送（enter=true）。
+ */
+export function buildQQKeyboard(buttons: QuickButton[], enter = false): any {
+  const rows: Array<{ buttons: any[] }> = []
+  for (const item of buttons) {
+    let row = rows[rows.length - 1]
+    if (!row || row.buttons.length >= 5) {
+      row = { buttons: [] }
+      rows.push(row)
+    }
+    row.buttons.push({
+      id: `b${rows.length}_${row.buttons.length + 1}`,
+      render_data: { label: item.label, visited_label: item.label, style: 1 },
+      action: {
+        type: 2,
+        permission: { type: 2 },
+        data: item.command,
+        enter,
+        unsupport_tips: '请升级 QQ 后重试',
+      },
+    })
+  }
+  return { content: { rows } }
 }
 
 const registry = new Map<string, Partial<RendererSet>>()
@@ -53,7 +87,7 @@ export function renderBindingList(bindings: Binding[], options: RenderOptions): 
     lines.push(`${index + 1}. ${binding.name}（${shortMask(binding.sensitiveId)}）`)
   })
   lines.push('')
-  lines.push('发送 dsu <序号或名字> 查看详情；dsu.add <Key尾号> 可以继续添加。')
+  lines.push('发送 dsu {序号或名字} 查看详情；dsu add {Key尾号} 可以继续添加。')
   return lines.join('\n')
 }
 
@@ -170,6 +204,7 @@ export function renderReportMarkdown(report: Report, options: RenderOptions): st
 }
 
 const MAX_ACCOUNTS = 10
+const MAX_CATALOG_KEYS = 20
 
 /** 账号级别的一行总用量：余额、累计、今日。 */
 function accountBlockLines(overview: AccountOverview, options: RenderOptions, markdown: boolean): string[] {
@@ -180,8 +215,6 @@ function accountBlockLines(overview: AccountOverview, options: RenderOptions, ma
     todayCost += item.today.cost
     todayTokens += totalTokens(item.today)
   }
-  const bound = overview.keys.filter((item) => item.binding).length
-
   const summary: string[] = []
   if (options.showBalance && overview.balance) {
     const balance = overview.balance
@@ -197,23 +230,29 @@ function accountBlockLines(overview: AccountOverview, options: RenderOptions, ma
     `今日 Token ${formatInt(todayTokens)}`,
     `Key ${overview.keys.length} 个`,
   ]
-  if (bound) second.push(`已绑定 ${bound} 个`)
   return [bullet(summary.join(' · ')), bullet(second.join(' · '))]
 }
 
 /**
- * 用户视角：每个账号先给账号总用量，再列出这个账号下已绑定的 Key 明细。
- * 没有绑定任何 Key 时也能看到账号总用量。
+ * QQ 官方机器人的 markdown 内联指令：点一下把 text 填进输入框（不自动发送）。
+ * 默认带 `/` 前缀，走 QQ 的标准指令格式；只有 markdown 消息里能用。
  */
+export function cmdInput(command: string, label: string, prefix = '/'): string {
+  const text = `${prefix}${command}`
+  return `<qqbot-cmd-input text="${text}" show="${label}" reference="false"/>`
+}
+
+/** 用户视角总览：每个账号先给账号总用量，再每个已绑定 Key 一行摘要。 */
 export function renderUserView(views: AccountView[], options: RenderOptions, markdown = false): string {
-  const lines: string[] = [markdown ? '**DeepSeek API用量**' : 'DeepSeek API用量：']
+  const link = (command: string, label: string) => cmdInput(command, label, options.commandPrefix ?? '/')
+  const lines: string[] = [markdown ? '**DeepSeek API用量**' : 'DeepSeek API用量']
   if (!views.length) {
-    lines.push('你还没有绑定账号。先发送 dsu.token <备注名> 添加账号。')
+    lines.push(markdown ? `你还没有绑定账号，${link('dsu login', '快捷登录')}` : '你还没有绑定账号，发送 dsu login {备注名} 添加一个。')
     return lines.join('\n')
   }
 
   const shown = views.slice(0, MAX_ACCOUNTS)
-  let index = 0
+  let hasBound = false
   lines.push('')
   shown.forEach((view, position) => {
     if (position > 0) lines.push('')
@@ -221,23 +260,118 @@ export function renderUserView(views: AccountView[], options: RenderOptions, mar
     lines.push(...accountBlockLines(view.overview, options, markdown))
 
     if (!view.reports.length) {
-      lines.push('  还没有绑定 Key：发送 dsu.add <Key尾号> <备注名> 可以查看单个 Key 的明细。')
+      lines.push(
+        markdown
+          ? `还没有绑定 Key，${link('dsu add', '快捷绑定')}`
+          : '  还没有绑定 Key，发送 dsu add {Key尾号} 绑定一个。',
+      )
       return
     }
 
-    view.reports.forEach((report, offset) => {
-      lines.push('')
-      lines.push(...reportBlock(report, index + offset + 1, options, markdown))
-    })
-    index += view.reports.length
+    hasBound = true
+    if (!markdown) lines.push('')
+    for (const report of view.reports) {
+      const number = report.number ?? 0
+      const name = markdown ? escapeMarkdown(report.key.name) : report.key.name
+      const masked = shortMask(report.key.sensitiveId) || report.key.trackingId
+      const tail = `今日 ${formatMoney(report.today.cost, options.currency)} · 累计 ${formatMoney(report.total.cost, options.currency)}`
+      if (markdown) {
+        lines.push(`- ${number}. **${name}** \`${masked}\` · ${tail} · ${link(`dsu ${number}`, '详情')}`)
+      } else {
+        lines.push(`  ${number}. ${name} · ${masked} · ${tail}`)
+      }
+    }
+    const unbound = view.overview.keys.length - view.reports.length
+    if (unbound > 0) {
+      lines.push(`  （账号里还有 ${unbound} 个 Key 没绑定）`)
+    }
   })
 
   if (views.length > shown.length) {
     lines.push('')
-    lines.push(`……还有 ${views.length - shown.length} 个账号未展示，发送 dsu <账号备注> 单独查看。`)
+    lines.push(`……还有 ${views.length - shown.length} 个账号未展示，发送 dsu {账号备注} 单独查看。`)
+  }
+
+  if (hasBound) {
+    lines.push('')
+    lines.push(
+      markdown
+        ? `${link('dsu keys', '全部 Key')} · ${link('dsu add', '快捷绑定')} · ${link('dsu', '刷新')}`
+        : '发送 dsu {序号} 看单个 Key 的完整明细。',
+    )
   }
 
   const updatedAt = shown.reduce((max, view) => Math.max(max, view.overview.updatedAt), 0)
+  lines.push('')
+  lines.push(`更新于：${formatDateTime(updatedAt || Date.now(), options.timeZone)}`)
+  return lines.join('\n')
+}
+
+/** 一个账号下全部 Key（含没绑定的），用来在聊天里代替平台网页。 */
+export function renderKeyCatalog(views: AccountView[], options: RenderOptions, markdown = false): string {
+  const link = (command: string, label: string) => cmdInput(command, label, options.commandPrefix ?? '/')
+  const lines: string[] = [markdown ? '**账号下的全部 Key**' : '账号下的全部 Key']
+  if (!views.length) {
+    lines.push(markdown ? `你还没有绑定账号，${link('dsu login', '快捷登录')}` : '你还没有绑定账号，发送 dsu login {备注名} 添加一个。')
+    return lines.join('\n')
+  }
+
+  const shown = views.slice(0, MAX_ACCOUNTS)
+  let hasUnbound = false
+  let updatedAt = 0
+  lines.push('')
+  shown.forEach((view, position) => {
+    if (position > 0) lines.push('')
+    const total = view.overview.keys.length
+    const bound = view.overview.keys.filter((item) => item.binding).length
+    updatedAt = Math.max(updatedAt, view.overview.updatedAt)
+
+    const head = `账号：${view.label} · ${total} 个 Key`
+    if (markdown) {
+      lines.push(`**${escapeMarkdown(head)}**`)
+    } else {
+      lines.push(total ? head : `${head}（平台没返回任何 Key）`)
+    }
+
+    const keys = view.overview.keys.slice(0, MAX_CATALOG_KEYS)
+    keys.forEach((item, index) => {
+      const name = markdown ? escapeMarkdown(item.key.name || item.key.trackingId) : item.key.name || item.key.trackingId
+      const masked = shortMask(item.key.sensitiveId) || item.key.trackingId
+      const tail = `今日 ${formatMoney(item.today.cost, options.currency)} · 累计 ${formatMoney(item.total.cost, options.currency)}`
+      if (item.binding) {
+        lines.push(markdown ? `- ${index + 1}. **${name}** \`${masked}\` · ${tail} · 已绑定` : `  ${index + 1}. ${name} · ${masked} · ${tail} · 已绑定`)
+        return
+      }
+      hasUnbound = true
+      if (markdown) {
+        // 没有脱敏 Key 的平台 Key（例如 harness 创建的）用 tracking_id 前缀也能绑
+        const suffix = masked.includes('**') ? (masked.split('**').pop() ?? '') : (item.key.trackingId || '').slice(0, 8)
+        lines.push(
+          `- ${index + 1}. **${name}** \`${masked}\` · ${tail} · ${link(`dsu add ${suffix}`, '绑定')}`,
+        )
+      } else {
+        lines.push(`  ${index + 1}. ${name} · ${masked} · ${tail}`)
+      }
+    })
+    if (total > keys.length) {
+      lines.push(`  ……还有 ${total - keys.length} 个 Key 未展示`)
+    }
+  })
+
+  if (views.length > shown.length) {
+    lines.push('')
+    lines.push(`……还有 ${views.length - shown.length} 个账号未展示，发送 dsu keys {账号备注} 单独查看。`)
+  }
+
+  if (hasUnbound) {
+    lines.push('')
+    lines.push(
+      markdown
+        ? `没绑定的 Key 点「绑定」就行，或者 ${link('dsu add', '快捷绑定')}。`
+        : '没绑定的 Key 用 dsu add {Key尾号} 绑定，之后就能在 dsu 里看明细。',
+    )
+  }
+
   lines.push('')
   lines.push(`更新于：${formatDateTime(updatedAt || Date.now(), options.timeZone)}`)
   return lines.join('\n')
@@ -284,7 +418,7 @@ export function renderBindingListMarkdown(bindings: Binding[], options: RenderOp
     lines.push(`${index + 1}. **${escapeMarkdown(binding.name)}** \`${shortMask(binding.sensitiveId)}\``)
   })
   lines.push('')
-  lines.push('发送 `dsu <序号或名字>` 查看详情，`dsu.add sk-...` 继续添加。')
+  lines.push('发送 `dsu {序号或名字}` 查看详情，`dsu.add sk-...` 继续添加。')
   return lines.join('\n')
 }
 

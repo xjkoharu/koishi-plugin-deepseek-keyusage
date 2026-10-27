@@ -13,23 +13,20 @@ export const name = 'deepseek-keyusage'
 export const inject = ['database']
 
 export const usage = `
-在 QQ 里查询 DeepSeek API Key 的余额、花费和 Token 用量。
+在 QQ 里查 DeepSeek 账号的余额、花费和 Token 用量。
 
 **账号 / Key 两级**：一个 userToken 是一个账号，一个账号下可以绑定多个 Key。
-只要绑定了账号，即使一个 Key 都没绑定，也能用 \`dsu\` 查账号总用量。
+只要登录了账号，即使一个 Key 都没绑定，也能用 \`dsu\` 查账号总用量。
 
-第一次使用：
-1. \`dsu.login <备注名>\` 读取 bot 所在电脑浏览器的登录态，或 \`dsu.login <userToken> <备注名>\` 直接粘贴；
-2. （可选）\`dsu.add <Key尾号> <备注名>\` 绑定 Key，看单个 Key 的明细；\`dsu add <Key尾号>\` 是同样的空格写法。
-   \`<Key尾号>\` 是平台上 Key 的后四位，不需要发完整 Key。
-
-解绑只影响 Key：\`dsu.unbind <序号/名字>\` 解绑一个，\`dsu.unbind\` 解绑全部，账号都保留；
-要退出账号用 \`dsu.logout [账号备注]\`。\`dsu.token\` 是 \`dsu.login\` 的旧名字，仍然可用。
+- \`dsu\` 账号总览 + 已绑定 Key 列表，\`dsu {序号/名字}\` 看单个 Key 的完整明细
+- \`dsu login {备注名}\` / \`dsu logout {账号备注}\` 绑定 / 退出账号
+- \`dsu add {Key尾号} {备注名}\` / \`dsu unbind {序号/名字}\` 绑定 / 解绑 Key（解绑不删账号）
+- \`dsu keys {账号备注}\` 列出账号下的全部 Key（含没绑定的），不用打开平台网页
+- QQ 消息里带「详情 / 快捷绑定」内联按钮，点一下自动填好指令
+- \`dsu help\` 看全部用法
 
 群聊里可以直接用；发送过 Token / 完整 Key 的消息会被自动撤回（可配置）。
-
-管理员：\`dsu.all [页码]\` 跨所有账号分页查看，\`dsu.key <名字>\` 查任意 Key。
-账号备注用 \`dsu.account list\` 查看，\`dsu.account rename 账号1 主号\` 修改。
+管理员：\`dsu all {页码}\`、\`dsu key {名字}\`、\`dsu refresh\`。
 
 注意：userToken 等同于账号登录态，不要外传。
 `
@@ -163,6 +160,12 @@ export function apply(ctx: Context, config: Config) {
       await service.ensureLegacyAccounts()
     } catch (error) {
       logger.warn?.(`补全旧账号备注失败：${(error as Error).message}`)
+    }
+    try {
+      const fixed = await service.sanitizeAccountNames()
+      if (fixed) logger.info(`已清理 ${fixed} 个混进 Token 的账号备注`)
+    } catch (error) {
+      logger.warn?.(`清理账号备注失败：${(error as Error).message}`)
     }
   })
 
