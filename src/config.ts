@@ -23,6 +23,8 @@ export interface Config {
   adminUsers: string[]
   /** 是否允许在群聊中绑定 Key */
   allowGroupBind: boolean
+  /** 群聊里发过 Token / 完整 Key 后自动撤回那条消息 */
+  autoRecallInGroup: boolean
   /** 是否向普通用户展示账户余额 */
   showBalance: boolean
   /** QQ 平台使用 Markdown 消息 */
@@ -79,7 +81,12 @@ export const Config: Schema<Config> = Schema.object({
     .default([])
     .role('table')
     .description('管理员白名单，可填 `qq:openid`、`onebot:QQ号` 或纯用户 ID。与权限等级取并集，任意一条命中即为管理员。'),
-  allowGroupBind: Schema.boolean().default(true).description('是否允许在群聊中绑定 Key。关闭后只能在私聊绑定（更安全；只发 Key 尾号也不会暴露完整 Key）。'),
+  allowGroupBind: Schema.boolean()
+    .default(true)
+    .description('是否允许在群聊里绑定。默认开启；关掉后只能在私聊里绑定（只发 Key 尾号也不会暴露完整 Key，一般不用关）。'),
+  autoRecallInGroup: Schema.boolean()
+    .default(true)
+    .description('群聊里发送账号 Token 或完整 Key 后，自动撤回那条消息（需要机器人有撤回权限；失败时只提示手动撤回）。'),
   showBalance: Schema.boolean().default(true).description('是否向普通用户展示账户总余额。'),
   qqMarkdown: Schema.boolean()
     .default(true)
@@ -107,6 +114,7 @@ export const DEFAULT_CONFIG: Config = {
   adminAuthority: 4,
   adminUsers: [],
   allowGroupBind: true,
+  autoRecallInGroup: true,
   showBalance: true,
   qqMarkdown: true,
   aliases: ['额度'],

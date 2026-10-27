@@ -12,13 +12,13 @@ import {
 
 describe('looksLikeKeySuffix', () => {
   it('accepts a short key suffix', () => {
-    expect(looksLikeKeySuffix('25f0')).toBe(true)
+    expect(looksLikeKeySuffix('abcd')).toBe(true)
     expect(looksLikeKeySuffix('abcd1234')).toBe(true)
   })
 
   it('rejects full keys and too-short values', () => {
     expect(looksLikeKeySuffix('sk-abcde0123456789abcdef1234')).toBe(false)
-    expect(looksLikeKeySuffix('25f')).toBe(false)
+    expect(looksLikeKeySuffix('abc')).toBe(false)
   })
 })
 

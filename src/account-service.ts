@@ -87,6 +87,13 @@ export interface AllPage {
   updatedAt: number
 }
 
+/** 用户视角的一个账号：账号总用量 + 这个账号下已绑定的 Key 明细。 */
+export interface AccountView {
+  label: string
+  overview: AccountOverview
+  reports: Report[]
+}
+
 interface UsageBundle {
   amounts: AmountSeries[]
   costs: CostSeries[]
@@ -177,14 +184,20 @@ export class AccountService {
     return rows.sort((a, b) => a.createdAt - b.createdAt) as StoredAccount[]
   }
 
-  /** 新账号必须带备注；已有账号直接复用。 */
-  async ensureAccount(userId: string, token: string, name?: string): Promise<StoredAccount> {
+  /** 新账号必须带备注；已有账号直接复用（renameExisting 为 true 时才改名）。 */
+  async ensureAccount(
+    userId: string,
+    token: string,
+    name?: string,
+    renameExisting = false,
+  ): Promise<StoredAccount> {
     const accountToken = token.trim()
     const rows: any[] = await this.db.get(ACCOUNT_TABLE, { userId, token: accountToken })
     if (rows[0]) {
-      if (name?.trim() && rows[0].name !== name.trim()) {
-        await this.db.set(ACCOUNT_TABLE, { id: rows[0].id }, { name: name.trim(), updatedAt: Date.now() })
-        return { ...rows[0], name: name.trim() }
+      const label = name?.trim()
+      if (renameExisting && label && rows[0].name !== label) {
+        await this.db.set(ACCOUNT_TABLE, { id: rows[0].id }, { name: label, updatedAt: Date.now() })
+        return { ...rows[0], name: label }
       }
       return rows[0] as StoredAccount
     }
@@ -192,7 +205,7 @@ export class AccountService {
     const label = name?.trim()
     if (!label) {
       throw new BindError(
-        '第一次绑定这个账号，请加一个备注：dsu.token <userToken> 主号\n或者 dsu.add 25f0 <userToken> 主号。',
+        '第一次绑定这个账号，需要加一个备注名，例如：dsu.add <Key尾号> <备注名> 或 dsu.token <userToken> <备注名>。',
       )
     }
     const sameName: any[] = await this.db.get(ACCOUNT_TABLE, { userId, name: label })
@@ -231,7 +244,7 @@ export class AccountService {
   }
 
   async setDefaultToken(userId: string, token: string, name?: string): Promise<void> {
-    await this.ensureAccount(userId, token, name)
+    await this.ensureAccount(userId, token, name, true)
     const rows: any[] = await this.db.get(USER_TABLE, { userId })
     const now = Date.now()
     if (rows.length) {
@@ -352,6 +365,71 @@ export class AccountService {
       }
     }
     return map
+  }
+
+  /**
+   * 用户绑定的所有账号（按添加顺序）。
+   * 只要设置过 Token 就算有账号：即使一个 Key 都没绑定，也能查账号总用量。
+   */
+  async userAccountList(userId: string): Promise<Array<{ token: string; label: string }>> {
+    const accounts = await this.accounts(userId)
+    const list = accounts
+      .filter((account) => account.token?.trim())
+      .map((account) => ({ token: account.token, label: account.name }))
+    const has = (token: string) => list.some((item) => item.token === token)
+    const append = (token?: string) => {
+      const value = token?.trim()
+      if (!value || has(value)) return
+      list.push({ token: value, label: `账号${list.length + 1}` })
+    }
+    append(await this.defaultToken(userId))
+    for (const binding of await this.bindings(userId)) append(binding.token)
+    return list
+  }
+
+  /** 按账号备注找 Token，找不到返回 undefined。 */
+  async accountTokenByName(userId: string, name?: string): Promise<string | undefined> {
+    const label = name?.trim().toLowerCase()
+    if (!label) return undefined
+    const accounts = await this.accounts(userId)
+    return accounts.find((item) => item.name.toLowerCase() === label)?.token
+  }
+
+  /** 一个账号的完整视图：账号总用量 + 这个账号下该用户已绑定的 Key。 */
+  async accountView(userId: string, token: string, label: string): Promise<AccountView> {
+    const overview = await this.overview(token)
+    const bindings = (await this.bindings(userId)).filter((item) => item.token === token)
+    const byTracking = new Map(bindings.map((item) => [item.trackingId, item]))
+    for (const item of overview.keys) {
+      const binding = byTracking.get(item.key.trackingId)
+      if (!binding) continue
+      item.binding = {
+        trackingId: binding.trackingId,
+        name: binding.keyName,
+        sensitiveId: binding.sensitiveId,
+        boundAt: binding.boundAt,
+        boundBy: binding.userId,
+      }
+    }
+    const reports = bindings.map((binding) => {
+      const item = overview.keys.find((entry) => entry.key.trackingId === binding.trackingId)
+      const key: ApiKeyInfo = item?.key ?? {
+        trackingId: binding.trackingId,
+        name: binding.keyName,
+        sensitiveId: binding.sensitiveId,
+        createdAt: null,
+        lastUse: null,
+      }
+      return {
+        key,
+        total: item?.total ?? emptyStat(),
+        today: item?.today ?? emptyStat(),
+        balance: overview.balance,
+        range: item?.range ?? { start: overview.updatedAt, end: overview.updatedAt },
+        updatedAt: overview.updatedAt,
+      }
+    })
+    return { label, overview, reports }
   }
 
   /** 管理员视角：跨用户按 token 去重，优先用任意一个备注。 */
@@ -489,10 +567,15 @@ export class AccountService {
     })
     const list: KeyOverview[] = keys.map((key) => {
       const stat = perKey.get(key.trackingId)
+      const keyStart = this.alignDay(
+        key.createdAt ? Math.floor(key.createdAt / 1000) : now - 30 * DAY_SECONDS,
+        tzOffset,
+      )
       return {
         key,
         total: stat?.total ?? emptyStat(),
         today: stat?.today ?? emptyStat(),
+        range: { start: keyStart, end },
       }
     })
     list.sort((a, b) => b.today.cost - a.today.cost || b.total.cost - a.total.cost)

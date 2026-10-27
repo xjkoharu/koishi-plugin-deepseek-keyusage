@@ -1,5 +1,5 @@
 import { hitRate, inputTokens, totalTokens } from './aggregate'
-import type { AllPage } from './account-service'
+import type { AccountView, AllPage } from './account-service'
 import type { AccountOverview, Binding, Report, Stat } from './types'
 import { formatCompact, formatInt, formatMoney, formatPercent, shortMask } from './utils/format'
 import { formatDateTime } from './utils/datetime'
@@ -53,7 +53,7 @@ export function renderBindingList(bindings: Binding[], options: RenderOptions): 
     lines.push(`${index + 1}. ${binding.name}（${shortMask(binding.sensitiveId)}）`)
   })
   lines.push('')
-  lines.push('发送 dsu <序号或名字> 查看详情；dsu.add sk-... 可以继续添加。')
+  lines.push('发送 dsu <序号或名字> 查看详情；dsu.add <Key尾号> 可以继续添加。')
   return lines.join('\n')
 }
 
@@ -167,6 +167,80 @@ export function renderReports(
 /** QQ 官方机器人（adapter-qq-crack）支持的原生 Markdown 版本。 */
 export function renderReportMarkdown(report: Report, options: RenderOptions): string {
   return renderReports([report], options, 0, true)
+}
+
+const MAX_ACCOUNTS = 10
+
+/** 账号级别的一行总用量：余额、累计、今日。 */
+function accountBlockLines(overview: AccountOverview, options: RenderOptions, markdown: boolean): string[] {
+  const bullet = (text: string) => (markdown ? `- ${text}` : `  ${text}`)
+  let todayCost = 0
+  let todayTokens = 0
+  for (const item of overview.keys) {
+    todayCost += item.today.cost
+    todayTokens += totalTokens(item.today)
+  }
+  const bound = overview.keys.filter((item) => item.binding).length
+
+  const summary: string[] = []
+  if (options.showBalance && overview.balance) {
+    const balance = overview.balance
+    summary.push(
+      `余额 ${formatMoney(balance.total, balance.currency)}（赠金 ${formatMoney(balance.granted, balance.currency)} / 充值 ${formatMoney(balance.toppedUp, balance.currency)}）`,
+    )
+  }
+  summary.push(`累计花费 ${formatMoney(overview.accountCost, options.currency)}`)
+  summary.push(`累计 Token ${formatInt(overview.accountTokens)}`)
+
+  const second = [
+    `今日花费 ${formatMoney(todayCost, options.currency)}`,
+    `今日 Token ${formatInt(todayTokens)}`,
+    `Key ${overview.keys.length} 个`,
+  ]
+  if (bound) second.push(`已绑定 ${bound} 个`)
+  return [bullet(summary.join(' · ')), bullet(second.join(' · '))]
+}
+
+/**
+ * 用户视角：每个账号先给账号总用量，再列出这个账号下已绑定的 Key 明细。
+ * 没有绑定任何 Key 时也能看到账号总用量。
+ */
+export function renderUserView(views: AccountView[], options: RenderOptions, markdown = false): string {
+  const lines: string[] = [markdown ? '**DeepSeek API用量**' : 'DeepSeek API用量：']
+  if (!views.length) {
+    lines.push('你还没有绑定账号。先发送 dsu.token <备注名> 添加账号。')
+    return lines.join('\n')
+  }
+
+  const shown = views.slice(0, MAX_ACCOUNTS)
+  let index = 0
+  lines.push('')
+  shown.forEach((view, position) => {
+    if (position > 0) lines.push('')
+    lines.push(markdown ? `**账号：${escapeMarkdown(view.label)}**` : `账号：${view.label}`)
+    lines.push(...accountBlockLines(view.overview, options, markdown))
+
+    if (!view.reports.length) {
+      lines.push('  还没有绑定 Key：发送 dsu.add <Key尾号> <备注名> 可以查看单个 Key 的明细。')
+      return
+    }
+
+    view.reports.forEach((report, offset) => {
+      lines.push('')
+      lines.push(...reportBlock(report, index + offset + 1, options, markdown))
+    })
+    index += view.reports.length
+  })
+
+  if (views.length > shown.length) {
+    lines.push('')
+    lines.push(`……还有 ${views.length - shown.length} 个账号未展示，发送 dsu <账号备注> 单独查看。`)
+  }
+
+  const updatedAt = shown.reduce((max, view) => Math.max(max, view.overview.updatedAt), 0)
+  lines.push('')
+  lines.push(`更新于：${formatDateTime(updatedAt || Date.now(), options.timeZone)}`)
+  return lines.join('\n')
 }
 
 export function renderOverviewMarkdown(overview: AccountOverview, options: RenderOptions): string {

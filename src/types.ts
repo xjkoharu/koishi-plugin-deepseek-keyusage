@@ -108,6 +108,8 @@ export interface KeyOverview {
   key: ApiKeyInfo
   total: Stat
   today: Stat
+  /** 这个 Key 的统计区间（从 Key 创建当天到明天零点） */
+  range?: Range
   /** 是否已被某个用户绑定 */
   binding?: Binding
 }

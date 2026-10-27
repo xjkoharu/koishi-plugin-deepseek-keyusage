@@ -181,9 +181,9 @@ describe('plugin integration', () => {
     if (baseDir) await rm(baseDir, { recursive: true, force: true })
   })
 
-  it('asks an unbound user to add a key first', async () => {
+  it('asks an unbound user to set up an account first', async () => {
     const replies = await client.receive('dsu')
-    expect(replies.join('\n')).toContain('你还没有绑定 API Key')
+    expect(replies.join('\n')).toContain('你还没有绑定账号')
   })
 
   it('denies admin commands to normal users', async () => {
@@ -271,10 +271,37 @@ describe('plugin integration', () => {
     expect(text).toContain('默认账号：')
   })
 
+  it('lets a group member set a token and bind without private chat', async () => {
+    const group = (app as any).mock.client('user-3', 'channel-3')
+    const saved = (await group.receive('dsu.token test-token-3-0123456789abcdef0123456789 群里的号')).join('\n')
+    expect(saved).toContain('账号已保存')
+    const bound = (await group.receive('dsu.add 9012')).join('\n')
+    expect(bound).toContain('添加成功：示例C')
+  })
+
+  it('accepts an explicit userToken in a group message', async () => {
+    const group = (app as any).mock.client('user-6', 'channel-6')
+    const text = (
+      await group.receive('dsu.add 5678 test-token-6-0123456789abcdef0123456789 群号2')
+    ).join('\n')
+    expect(text).toContain('添加成功：示例B')
+  })
+
+  it('shows the account total even without any bound key', async () => {
+    const fresh = (app as any).mock.client('user-5', 'channel-5')
+    await fresh.receive('dsu.token test-token-5-0123456789abcdef0123456789 只看账号')
+    const text = (await fresh.receive('dsu')).join('\n')
+    expect(text).toContain('DeepSeek API用量')
+    expect(text).toContain('账号：只看账号')
+    expect(text).toContain('累计花费 ¥3.21')
+    expect(text).toContain('Key 3 个')
+    expect(text).toContain('还没有绑定 Key')
+  })
+
   it('requires a remark when binding a new account', async () => {
     const third = (app as any).mock.client('user-4')
     const text = (await third.receive('dsu.add 1234 test-token-4-0123456789abcdef0123456789')).join('\n')
-    expect(text).toContain('第一次绑定这个账号，请加一个备注')
+    expect(text).toContain('第一次绑定这个账号，需要加一个备注名')
   })
 
   it('binds a second account for the same user', async () => {
@@ -305,7 +332,7 @@ describe('plugin integration', () => {
     expect(text).not.toContain('名称：示例B')
     expect(text).toContain('账号：备用号')
     expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 2 个 Key')
-    expect((await client.receive('dsu')).join('\n')).toContain('你还没有绑定 API Key')
+    expect((await client.receive('dsu')).join('\n')).toContain('你还没有绑定账号')
   })
 
   it('sets a default token via chat and binds a key with it', async () => {
@@ -320,5 +347,13 @@ describe('plugin integration', () => {
     const text = (await second.receive('dsu add 9012 test-token-1-0123456789abcdef0123456789 主号')).join('\n')
     expect(text).toContain('添加成功：示例C')
     expect(text).toContain('sk-klmno**9012')
+  })
+
+  it('binds by suffix with a remark that is not a token', async () => {
+    const text = (await privateClient.receive('dsu.add 1234 主号')).join('\n')
+    expect(text).toContain('添加成功：示例A')
+    const list = (await privateClient.receive('dsu.account list')).join('\n')
+    expect(list).toContain('小号')
+    expect(list).not.toContain('主号')
   })
 })

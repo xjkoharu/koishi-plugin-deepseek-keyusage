@@ -7,9 +7,11 @@ import {
   renderReport,
   renderReportMarkdown,
   renderReports,
+  renderUserView,
   resolveRenderer,
   type RenderOptions,
 } from '../src/render'
+import type { AccountView } from '../src/account-service'
 import type { AccountOverview, ApiKeyInfo, Report } from '../src/types'
 
 const options: RenderOptions = {
@@ -104,6 +106,56 @@ describe('renderReport', () => {
     const text = renderReports([], options, 0, false, overview)
     expect(text).toContain('账户总用量：')
     expect(text).toContain('你还没有添加 API Key')
+  })
+})
+
+describe('renderUserView', () => {
+  const overview: AccountOverview = {
+    keys: [
+      {
+        key,
+        total: report.total,
+        today: report.today,
+        range: report.range,
+        binding: {
+          trackingId: 'tk_1',
+          name: '示例A',
+          sensitiveId: key.sensitiveId,
+          boundAt: 0,
+          boundBy: 'qq:user-1',
+        },
+      },
+      {
+        key: { ...key, trackingId: 'tk_2', name: '示例B', sensitiveId: 'sk-fghij**5678' },
+        total: report.total,
+        today: report.today,
+        range: report.range,
+      },
+    ],
+    total: report.total,
+    accountCost: 3.21,
+    accountTokens: 187,
+    balance: report.balance,
+    updatedAt: report.updatedAt,
+  }
+
+  it('shows account totals and the bound key details', () => {
+    const views: AccountView[] = [{ label: '主号', overview, reports: [report] }]
+    const text = renderUserView(views, options)
+    expect(text).toContain('DeepSeek API用量：')
+    expect(text).toContain('账号：主号')
+    expect(text).toContain('  余额 ¥12.50（赠金 ¥2.50 / 充值 ¥10.00） · 累计花费 ¥3.21 · 累计 Token 187')
+    expect(text).toContain('  今日花费 ¥0.040 · 今日 Token 34 · Key 2 个 · 已绑定 1 个')
+    expect(text).toContain('API-1：sk-abcde**1234')
+  })
+
+  it('keeps the account totals when nothing is bound', () => {
+    const views: AccountView[] = [{ label: '主号', overview, reports: [] }]
+    const text = renderUserView(views, options)
+    expect(text).toContain('账号：主号')
+    expect(text).toContain('累计花费 ¥3.21')
+    expect(text).toContain('还没有绑定 Key')
+    expect(text).not.toContain('API-1')
   })
 })
 

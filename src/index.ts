@@ -15,13 +15,18 @@ export const inject = ['database']
 export const usage = `
 在 QQ 里查询 DeepSeek API Key 的余额、花费和 Token 用量。
 
-**多账号**：每个平台账号（userToken）可以绑定多个 Key；一个人也可以绑定多个账号下的 Key。
+**账号 / Key 两级**：一个 userToken 是一个账号，一个账号下可以绑定多个 Key。
+只要绑定了账号，即使一个 Key 都没绑定，也能用 \`dsu\` 查账号总用量。
 
-第一次使用：私聊机器人发 \`dsu.token 主号\` 设置当前账号（不填 token 会读取 bot 所在电脑的浏览器；新账号必须带备注），然后发 \`dsu.add 25f0\` 绑定 Key。
-也可以直接发 \`dsu.add 25f0 你的userToken 朋友的号\` 绑定另一个账号；\`dsu add 25f0\` 是同样的空格写法。
+第一次使用：
+1. \`dsu.token <备注名>\` 读取 bot 所在电脑浏览器的登录态，或 \`dsu.token <userToken> <备注名>\` 直接粘贴；
+2. （可选）\`dsu.add <Key尾号> <备注名>\` 绑定 Key，看单个 Key 的明细；\`dsu add <Key尾号>\` 是同样的空格写法。
+   \`<Key尾号>\` 是平台上 Key 的后四位，不需要发完整 Key。
+
+群聊里可以直接用；发送过 Token / 完整 Key 的消息会被自动撤回（可配置）。
 
 管理员：\`dsu.all [页码]\` 跨所有账号分页查看，\`dsu.key <名字>\` 查任意 Key。
-账号备注可以用 \`dsu.account list\` 查看，\`dsu.account rename 账号1 主号\` 修改。
+账号备注用 \`dsu.account list\` 查看，\`dsu.account rename 账号1 主号\` 修改。
 
 注意：userToken 等同于账号登录态，不要外传。
 `
