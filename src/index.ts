@@ -19,9 +19,12 @@ export const usage = `
 只要绑定了账号，即使一个 Key 都没绑定，也能用 \`dsu\` 查账号总用量。
 
 第一次使用：
-1. \`dsu.token <备注名>\` 读取 bot 所在电脑浏览器的登录态，或 \`dsu.token <userToken> <备注名>\` 直接粘贴；
+1. \`dsu.login <备注名>\` 读取 bot 所在电脑浏览器的登录态，或 \`dsu.login <userToken> <备注名>\` 直接粘贴；
 2. （可选）\`dsu.add <Key尾号> <备注名>\` 绑定 Key，看单个 Key 的明细；\`dsu add <Key尾号>\` 是同样的空格写法。
    \`<Key尾号>\` 是平台上 Key 的后四位，不需要发完整 Key。
+
+解绑只影响 Key：\`dsu.unbind <序号/名字>\` 解绑一个，\`dsu.unbind\` 解绑全部，账号都保留；
+要退出账号用 \`dsu.logout [账号备注]\`。\`dsu.token\` 是 \`dsu.login\` 的旧名字，仍然可用。
 
 群聊里可以直接用；发送过 Token / 完整 Key 的消息会被自动撤回（可配置）。
 

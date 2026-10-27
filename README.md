@@ -37,12 +37,13 @@ API-1：sk-abcde**1234
 ## 功能
 
 - `dsu`：列出自己所有账号的总用量；有绑定 Key 时同时列出每个 Key 的明细
-- **账号优先**：只要 `dsu.token` 设置过账号，不绑定 Key 也能查余额和账号总用量
+- **账号优先**：只要 `dsu.login` 登录过账号，不绑定 Key 也能查余额和账号总用量
 - 一个用户可以绑定多个账号，每个账号下可以绑定多个 Key；别人的账号 Token 也可以帮你绑
 - 支持只发 Key 尾号绑定（`dsu.add <Key尾号>`），不需要在聊天里发完整 Key
-- `dsu.token`：读取 / 设置账号 Token，保存到数据库；不填 token 时读取 bot 所在电脑的浏览器
-- **群聊可用**：QQ 官方机器人不开放私聊时，在群里也能直接 `dsu.token` / `dsu.add`
+- `dsu.login` / `dsu.logout`：登录 / 退出账号；`dsu.add` / `dsu.unbind`：绑定 / 解绑 Key，两层互不连带
+- **群聊可用**：QQ 官方机器人不开放私聊时，在群里也能直接 `dsu.login` / `dsu.add`
 - 群聊里发过账号 Token 或完整 Key 的消息会**自动撤回**（可配置），失败时提示手动撤回
+- 所有子指令都支持空格写法（`dsu add` = `dsu.add`）
 - `dsu.all [页码]`（管理员）：跨所有账号汇总，分页显示；`dsu.key <名字>` 跨所有账号查单个 Key
 - 支持 `adapter-qq`（`qq` / `qqguild`）与 `adapter-onebot`，渲染层可扩展
 - 平台 Token / 绑定关系存在 Koishi 数据库里，不写 JSON 文件，不显示原文
@@ -52,8 +53,8 @@ API-1：sk-abcde**1234
 三步，全部可以在群里完成：
 
 ```text
-dsu.token <备注名>                        # ① 读取 bot 所在电脑的浏览器登录态，保存为「主号」这样的备注
-dsu.token <userToken> <备注名>            # ① 或者直接粘贴账号 Token（朋友不在同一台电脑时用这个）
+dsu.login <备注名>                        # ① 读取 bot 所在电脑的浏览器登录态，保存为「主号」这样的备注
+dsu.login <userToken> <备注名>            # ① 或者直接粘贴账号 Token（朋友不在同一台电脑时用这个）
 dsu.add <Key尾号> <备注名>                 # ② 绑定一个 Key（可选，不绑也能看账号总用量）
 dsu                                       # ③ 查看账号总用量 + 已绑定 Key 的明细
 ```
@@ -61,11 +62,26 @@ dsu                                       # ③ 查看账号总用量 + 已绑�
 `<Key尾号>` 是平台上 Key 的后四位，例如 Key 是 `sk-xxxxxxabcd` 就发 `abcd`；也可以直接发完整的 `sk-...`。
 
 > 新账号必须带备注名，避免出现一堆分不清的「账号1、账号2」。旧数据会自动补成「账号N」，可以用 `dsu.account rename` 改。
+>
+> `dsu.token` 是 `dsu.login` 的旧名字，仍然可用。
+
+### 绑定和解绑是两层，互不连带
+
+```text
+dsu.login  <备注名>            # 账号：登录 / 切到某个账号
+dsu.logout [<账号备注>]        # 账号：退出账号（连带这个账号下的 Key）
+
+dsu.add    <Key尾号> [<备注名>]  # Key：绑定
+dsu.unbind [<序号/名字>]        # Key：解绑（不带参数解绑全部 Key，账号保留）
+dsu.remove <序号/名字>          # Key：解绑单个（dsu.unbind <名字> 的另一种写法）
+```
+
+`dsu.unbind` **不会**再顺手删掉账号：解绑之后发 `dsu` 还能看到账号总用量。要退出账号请用 `dsu.logout`。
 
 ### 多账号
 
 ```text
-dsu.token <备注名>                             # 默认账号
+dsu.login <备注名>                             # 默认账号
 dsu.add <Key尾号> <另一个userToken> <备注名>    # 把 Key 绑到另一个账号
 dsu.add <Key尾号> <备注名>                      # 备注名能对上已有账号时，绑到那个账号
 dsu                                            # 所有账号的总用量 + Key 明细
@@ -73,6 +89,7 @@ dsu <备注名>                                    # 只看一个账号
 dsu <序号/名字>                                 # 只看一个 Key
 dsu.account list                               # 查看账号备注
 dsu.account rename <账号/备注> <新备注>          # 改账号备注
+dsu.logout <备注名>                             # 退出这个账号
 ```
 
 同一个账号下的多个 Key 共用余额；不同账号的余额分开显示。
@@ -86,23 +103,25 @@ dsu.account rename <账号/备注> <新备注>          # 改账号备注
 | `dsu` | 列出所有账号的总用量，以及已绑定 Key 的完整明细 | 所有人 |
 | `dsu <备注名>` | 只看某个账号 | 所有人 |
 | `dsu <序号/名字>` | 只看某个 Key | 所有人 |
-| `dsu.token <备注名>` | 从 bot 本机浏览器读取账号 Token 并保存 | 所有人 |
-| `dsu.token <userToken> <备注名>` | 直接粘贴账号 Token | 所有人 |
+| `dsu.login <备注名>` | 从 bot 本机浏览器读取账号 Token 并保存（旧名 `dsu.token`） | 所有人 |
+| `dsu.login <userToken> <备注名>` | 直接粘贴账号 Token | 所有人 |
+| `dsu.logout [<账号备注>]` | 退出账号（连带这个账号下的 Key）；不带参数退出默认账号 | 所有人 |
 | `dsu.add <Key尾号> [<备注名>]` | 用 Key 尾号绑定到默认账号（新账号必须带备注名） | 所有人 |
 | `dsu.add <Key尾号> <userToken> <备注名>` | 绑定到另一个账号 | 所有人 |
 | `dsu.add sk-... [<userToken>] [<备注名>]` | 用完整 Key 绑定（会调用官方接口校验一次） | 所有人 |
-| `dsu add ...` / `dsu token ...` | 空格写法，等同 `dsu.add` / `dsu.token` | 所有人 |
+| `dsu.unbind [<序号/名字>]` | 解绑 Key：带参数解绑一个，不带参数解绑全部（账号保留） | 所有人 |
 | `dsu.account list` | 查看账号备注和 Key 数量 | 所有人 |
 | `dsu.account rename <账号/备注> <新备注>` | 修改账号备注 | 所有人 |
-| `dsu.remove <序号/名字>` | 移除某个 Key（不影响账号） | 所有人 |
+| `dsu.remove <序号/名字>` | 移除某个 Key（等同 `dsu.unbind <名字>`） | 所有人 |
 | `dsu.list` | 列出自己绑定的 Key | 所有人 |
-| `dsu.unbind` | 解绑全部 Key 和账号 | 所有人 |
 | `dsu.all [页码]` | 跨所有账号汇总全部 Key，分页显示 | 管理员 |
 | `dsu.key <名字>` | 跨所有账号查指定 Key | 管理员 |
 | `dsu.refresh` | 清空查询缓存 | 管理员 |
 | `dsu.whoami` | 查看自己的平台 ID、权限等级、绑定/账号状态 | 所有人 |
 
 主指令别名默认是 `额度`，可以在配置里改。`dsu.bind` 作为旧指令保留，等同 `dsu.add`。
+
+**空格写法**对所有子指令都生效：`dsu login`、`dsu logout`、`dsu add`、`dsu unbind`、`dsu remove`、`dsu list`、`dsu account`、`dsu all`、`dsu key`、`dsu refresh`、`dsu whoami`，都和点号写法等价。
 
 ## 工作原理（先看这段）
 
@@ -122,7 +141,7 @@ DeepSeek 官方 API 只提供[账号级余额接口](https://api-docs.deepseek.c
 - ✅ 不需要改 `base_url`、不需要走代理，用的还是原来的 Key
 - ✅ 账号总用量来自账号级接口，不依赖 Key 绑定
 - ⚠️ 这不是官方承诺的公开 API，平台改版时插件可能需要跟着改（接口层集中在 `src/api/client.ts`）
-- ⚠️ `userToken` 会过期，过期后重新 `dsu.token <备注名>` 即可（插件会提示「平台 Token 失效」）
+- ⚠️ `userToken` 会过期，过期后重新 `dsu.login <备注名>` 即可（插件会提示「平台 Token 失效」）
 
 > 平台对单次查询有 **31 天** 的上限，且 `end` 必须是开区间；插件会自动按 31 天分段查询再合并，所以「累计」是完整的。
 >
@@ -149,8 +168,8 @@ plugins:
 推荐直接用聊天指令（群聊、私聊都可以）：
 
 ```text
-dsu.token <备注名>                # 读取 bot 所在电脑的 Edge/Chrome，并加备注
-dsu.token <userToken> <备注名>     # 或者直接粘贴 token 和备注
+dsu.login <备注名>                # 读取 bot 所在电脑的 Edge/Chrome，并加备注
+dsu.login <userToken> <备注名>     # 或者直接粘贴 token 和备注
 ```
 
 Token 会保存到这个用户的默认账号，之后 `dsu.add <Key尾号>` 就用它。绑定关系和多账号 Token 都存在 Koishi 数据库里，不会写回 `koishi.yml`，也不会在聊天里显示原文。
@@ -163,7 +182,7 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add <Key尾号>` 就
 
 **手动获取**：登录 [platform.deepseek.com](https://platform.deepseek.com) → `F12` → `Application` → `Local Storage` → `https://platform.deepseek.com` → 复制 `userToken` 的值。
 
-> `dsu.token` 的浏览器读取只能读 **bot 跑的那台电脑**。朋友在自己的电脑上，让他自己复制 userToken，然后用 `dsu.token <userToken> <备注名>` 或 `dsu.add <Key尾号> <userToken> <备注名>` 绑定。
+> `dsu.login` 的浏览器读取只能读 **bot 跑的那台电脑**。朋友在自己的电脑上，让他自己复制 userToken，然后用 `dsu.login <userToken> <备注名>` 或 `dsu.add <Key尾号> <userToken> <备注名>` 绑定。
 >
 > `userToken` 等同于账号登录态。不要发到公开渠道，也不要提交到公开仓库。
 
@@ -175,7 +194,7 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add <Key尾号>` 就
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `userToken` | 空 | 旧版全局 Token，仅用于迁移；新绑定请用 `dsu.token` |
+| `userToken` | 空 | 旧版全局 Token，仅用于迁移；新绑定请用 `dsu.login` |
 | `autoReadToken` | `true` | 没有 Token 时自动从本机 Edge / Chrome 读取（只查找 `platform.deepseek.com`，校验通过才会使用） |
 | `apiBaseUrl` | `https://platform.deepseek.com` | 平台接口地址 |
 | `officialBaseUrl` | `https://api.deepseek.com` | 官方接口，用于校验完整 Key；只发尾号时不需要 |
@@ -200,7 +219,7 @@ Token 会保存到这个用户的默认账号，之后 `dsu.add <Key尾号>` 就
 1. 浏览器登录 [platform.deepseek.com](https://platform.deepseek.com)
 2. 按 `F12` → `Application`（应用）→ `Local Storage` → `https://platform.deepseek.com`
 3. 找到 `userToken`，复制它的值（带不带外层引号都能识别）
-4. 发送 `dsu.token <userToken> <备注名>`，或粘贴到插件配置的「平台 Token」里并保存
+4. 发送 `dsu.login <userToken> <备注名>`，或粘贴到插件配置的「平台 Token」里并保存
 
 > `userToken` 等同于账号登录态。怀疑泄露时去平台「退出所有设备」即可作废。
 
@@ -255,7 +274,7 @@ registerRenderer('telegram', {
 
 ```bash
 npm install
-npm test        # 构建 + 103 个单元/集成测试（Koishi mock 适配器）
+npm test        # 构建 + 106 个单元/集成测试（Koishi mock 适配器）
 npm run build   # 输出到 lib/
 npm run watch   # 开发时增量编译
 ```
@@ -268,7 +287,9 @@ npm run watch   # 开发时增量编译
 - 用量聚合（累计 / 今日 / 按 Key）
 - 多账号、多 Key 绑定、旧数据迁移
 - 账号总用量（没有绑定 Key 时也能查）
-- 群聊绑定（`dsu.token` / `dsu.add` 都不要求私聊）
+- 群聊绑定（`dsu.login` / `dsu.add` 都不要求私聊）
+- 登录 / 退出账号（`dsu.login` / `dsu.logout`）与解绑 Key（`dsu.unbind`）互不连带
+- 空格写法（`dsu add` / `dsu unbind` / `dsu account` / `dsu all` ……）
 - 浏览器 Token 提取、Token 解析顺序、`.env` 写入
 - 完整指令流程（添加多个 → 列表 → 按序号/名字查询 → 移除 → 解绑）
 
@@ -296,15 +317,17 @@ tests/            单元测试 + 集成测试
 
 ## 常见问题
 
-**没有绑定 Key，能查吗**：能。`dsu` 先看账号；只要 `dsu.token` 设置过账号，就会显示余额、累计花费、今日花费和 Key 个数。绑定 Key 只是多看每个 Key 的明细。
+**没有绑定 Key，能查吗**：能。`dsu` 先看账号；只要 `dsu.login` 登录过账号，就会显示余额、累计花费、今日花费和 Key 个数。绑定 Key 只是多看每个 Key 的明细。
 
-**提示「平台 Token 失效」**：重新 `dsu.token <备注名>` 读取，或 `dsu.token <userToken> <备注名>` 粘贴新 Token；平台改过密码 / 退出过设备后旧 Token 会失效。
+**提示「平台 Token 失效」**：重新 `dsu.login <备注名>` 读取，或 `dsu.login <userToken> <备注名>` 粘贴新 Token；平台改过密码 / 退出过设备后旧 Token 会失效。
+
+**`dsu.unbind` 会把账号也删掉吗**：不会。`dsu.unbind` 只动 Key，账号保留，解绑后发 `dsu` 还能看账号总用量。要退出账号用 `dsu.logout [<账号备注>]`。
 
 **一键读取提示「没有找到可用的 Token」**：
 1. 确认浏览器和 Koishi 在同一台电脑；
 2. 用 Edge 或 Chrome 登录并刷新一次 platform.deepseek.com；
 3. 看 Koishi 日志里有没有 `读取浏览器 LevelDB 失败`（通常是浏览器正在写入，重试一次即可）；
-4. 仍然不行就发 `dsu.token <userToken> <备注名>`。
+4. 仍然不行就发 `dsu.login <userToken> <备注名>`。
 
 **为什么余额是账号级的**：余额属于整个账号，花费和 Token 能按 Key 分开。
 

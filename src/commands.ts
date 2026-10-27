@@ -51,7 +51,7 @@ function describeError(error: unknown): string {
   if (isPlatformError(error)) {
     switch (error.kind) {
       case 'auth':
-        return '这个账号的 Token 失效了，请发送 dsu.token <备注名> 重新读取，或 dsu.add <Key尾号> <新userToken> <备注名> 重新绑定账号。'
+        return '这个账号的 Token 失效了，请发送 dsu.login <备注名> 重新读取，或 dsu.add <Key尾号> <新userToken> <备注名> 重新绑定账号。'
       case 'config':
         return '还没有配置这个账号的 Token。'
       case 'rate-limit':
@@ -71,8 +71,8 @@ function describeError(error: unknown): string {
 
 const NO_ACCOUNT_MESSAGE = [
   '你还没有绑定账号。',
-  '第一步：dsu.token <备注名>  从 bot 本机浏览器读取账号 Token',
-  '　　　　 dsu.token <userToken> <备注名>  直接粘贴账号 Token',
+  '第一步：dsu.login <备注名>  从 bot 本机浏览器读取账号 Token',
+  '　　　　 dsu.login <userToken> <备注名>  直接粘贴账号 Token',
   '第二步（可选）：dsu.add <Key尾号> <备注名>  绑定 Key 看单个 Key 的明细',
   '只绑账号不绑 Key 也能查账号总用量。',
 ].join('\n')
@@ -85,10 +85,11 @@ function bindUsage(command: string): string {
   ].join('\n')
 }
 
-const TOKEN_USAGE = [
-  '用法：dsu.token <备注名>',
-  '　　　dsu.token <userToken> <备注名>',
+const LOGIN_USAGE = [
+  '用法：dsu.login <备注名>',
+  '　　　dsu.login <userToken> <备注名>',
   '只发备注名时，从 bot 所在电脑的 Edge / Chrome 读取 platform.deepseek.com 的登录态。',
+  'dsu.token 是同一指令的旧名字，仍然可用。',
 ].join('\n')
 
 interface BindArgs {
@@ -111,7 +112,7 @@ function splitBindArgs(values: Array<string | undefined>): BindArgs {
   return { rawKey, name: [first, ...rest].join(' ') }
 }
 
-/** `dsu.token <备注名>` 与 `dsu.token <userToken> <备注名>` 的解析规则同上。 */
+/** `dsu.login <备注名>` 与 `dsu.login <userToken> <备注名>` 的解析规则同上。 */
 function splitTokenArgs(values: Array<string | undefined>): { token?: string; name?: string } {
   const parts = values.map((value) => String(value ?? '').trim()).filter(Boolean)
   if (!parts.length) return {}
@@ -243,7 +244,7 @@ export function applyCommands(
     if (!token) {
       return [
         '你还没有设置账号 Token。',
-        '先发 dsu.token <备注名> 读取本机登录态，或者 dsu.token <userToken> <备注名> 直接粘贴。',
+        '先发 dsu.login <备注名> 读取本机登录态，或者 dsu.login <userToken> <备注名> 直接粘贴。',
       ].join('\n')
     }
 
@@ -275,7 +276,7 @@ export function applyCommands(
       if (!scanned) {
         return [
           '没有从本机浏览器找到可用的平台 Token。',
-          '请确认 bot 所在电脑已登录 platform.deepseek.com，或者发送 dsu.token <userToken> <备注名> 直接粘贴。',
+          '请确认 bot 所在电脑已登录 platform.deepseek.com，或者发送 dsu.login <userToken> <备注名> 直接粘贴。',
         ].join('\n')
       }
       await service.verifyToken(scanned)
@@ -302,14 +303,127 @@ export function applyCommands(
       .join('\n')
   }
 
+  /** 只解绑 Key：账号保留，还能继续看账号总用量。 */
+  const unbindAll = async (session: Session) => {
+    const count = await service.clearBindings(userKey(session)!)
+    return count
+      ? `已解绑全部 ${count} 个 Key（账号保留，发 dsu 还能看账号总用量）。`
+      : '你还没有绑定任何 Key。'
+  }
+
+  const removeKey = async (session: Session, query: string, viaUnbind = false) => {
+    const left = cooldownLeft(session)
+    if (left > 0) return `操作太频繁啦，${left} 秒后再试。`
+    const binding = await service.removeBinding(userKey(session)!, query)
+    const lines = [`已移除：${binding.keyName}（${shortMask(binding.sensitiveId)}）`]
+    if (viaUnbind) lines.push('dsu.unbind 不带参数才会解绑全部 Key；退出账号用 dsu.logout。')
+    return lines.join('\n')
+  }
+
+  const logoutCommand = async (session: Session, query?: string) => {
+    const { account, keys, next } = await service.logoutAccount(userKey(session)!, query)
+    const lines = [`已退出账号：${account.name}（${maskToken(account.token)}）`]
+    lines.push(keys ? `同时移除了这个账号下你绑定的 ${keys} 个 Key。` : '这个账号下没有绑定 Key。')
+    if (next) lines.push(`默认账号已切换到：${next.name}`)
+    return lines.join('\n')
+  }
+
+  const listKeys = async (session: Session) => {
+    const bindings = await service.bindings(userKey(session)!)
+    if (!bindings.length) return '你还没有绑定 Key。发送 dsu.add <Key尾号> <备注名> 绑定一个。'
+    return showList(session, bindings)
+  }
+
+  const accountCommand = async (session: Session, args: string[]) => {
+    const action = String(args[0] ?? '').trim().toLowerCase()
+    const key = userKey(session)!
+    if (action === 'list') {
+      const accounts = await service.accounts(key)
+      if (!accounts.length) return '你还没有添加账号。先发 dsu.login <备注名>。'
+      const bindings = await service.bindings(key)
+      const lines = ['账号列表：']
+      for (const account of accounts) {
+        const count = bindings.filter((item) => item.token === account.token).length
+        lines.push(`- ${account.name}：${maskToken(account.token)} · ${count} 个 Key`)
+      }
+      return lines.join('\n')
+    }
+    if (action === 'rename') {
+      const query = String(args[1] ?? '').trim()
+      const name = String(args[2] ?? '').trim()
+      if (!query || !name) return '用法：dsu.account rename <账号/备注> <新备注>'
+      const account = await service.renameAccount(key, query, name)
+      return `账号备注已改为：${account.name}`
+    }
+    return '用法：dsu.account list 或 dsu.account rename <账号/备注> <新备注>'
+  }
+
+  const allCommand = async (session: Session, pageArg?: string) => {
+    const denied = requireAdmin(session)
+    if (denied) return denied
+    const left = cooldownLeft(session)
+    if (left > 0) return `查询太频繁啦，${left} 秒后再试。`
+    const page = Number(pageArg ?? 1) || 1
+    const data = await service.allPage(page)
+    const options = renderOptions(session, config)
+    const markdown = useMarkdown(session)
+    const text = renderAllPage(data, options, markdown)
+    return markdown ? markdownReply(text) : text
+  }
+
+  const keyCommand = async (session: Session, query: string) => {
+    const denied = requireAdmin(session)
+    if (denied) return denied
+    if (!query) return '用法：dsu.key <名字或 Key ID>'
+    const left = cooldownLeft(session)
+    if (left > 0) return `查询太频繁啦，${left} 秒后再试。`
+    const keys = await service.findKeys(query)
+    if (!keys.length) return `没有找到匹配「${query}」的 Key。`
+    if (keys.length > 1) {
+      const names = keys
+        .slice(0, 10)
+        .map((item) => `${item.key.name}（${shortMask(item.key.sensitiveId)}）`)
+        .join('、')
+      return `匹配到多个 Key：${names}\n请写完整一点的名字。`
+    }
+    const found = keys[0]
+    const report = found.binding
+      ? await service.report(found.binding, found.label)
+      : await service.reportKey(found.token, found.key, found.label)
+    return showReports(session, [report])
+  }
+
+  const refreshCache = async (session: Session) => {
+    const denied = requireAdmin(session)
+    if (denied) return denied
+    service.clearCache()
+    return '缓存已清空，下次查询会重新拉取平台数据。'
+  }
+
+  const whoamiCommand = async (session: Session) => {
+    const key = userKey(session)!
+    const bindings = await service.bindings(key)
+    const accounts = new Set(bindings.map((item) => item.token)).size
+    const token = await service.defaultToken(key)
+    return [
+      `平台：${session.platform}`,
+      `用户 ID：${session.userId}`,
+      `管理员：${isAdmin(session, config) ? '是' : '否'}`,
+      `绑定：${bindings.length} 个 Key · ${accounts} 个账号`,
+      `默认账号：${token ? maskToken(token) : '未设置'}`,
+    ].join('\n')
+  }
+
   const main = ctx
     .command('dsu [query:text]', '查询 DeepSeek API 用量')
     .usage(
       [
         '账号 / Key 两个层级：一个 userToken 是一个账号，一个账号下可以绑定多个 Key。',
-        '第一步（绑定账号）：dsu.token <备注名> 读取 bot 本机浏览器，或 dsu.token <userToken> <备注名> 直接粘贴。',
+        '第一步（绑定账号）：dsu.login <备注名> 读取 bot 本机浏览器，或 dsu.login <userToken> <备注名> 直接粘贴。',
         '第二步（可选）：dsu.add <Key尾号> <备注名> 绑定 Key；不绑定 Key 也能查账号总用量。',
         'dsu 列出所有账号的总用量和已绑定的 Key；dsu <账号备注> 只看一个账号；dsu <序号/名字> 只看一个 Key。',
+        '解绑只影响 Key：dsu.unbind <序号/名字> 解绑一个，dsu.unbind 解绑全部；退出账号用 dsu.logout。',
+        '空格写法对所有子指令生效：dsu login / dsu logout / dsu add / dsu list / dsu remove / dsu unbind / dsu account / dsu all / dsu key / dsu refresh / dsu whoami。',
         '群聊里可以直接用，用 Key 尾号（后四位）绑定不会暴露完整 Key。',
         '管理员：dsu.all [页码] 跨所有账号汇总；dsu.key <名字> 查任意 Key。',
       ].join('\n'),
@@ -317,7 +431,8 @@ export function applyCommands(
     .example('dsu')
     .example('dsu 主号')
     .example('dsu.add <Key尾号> <备注名>')
-    .example('dsu.token <备注名>')
+    .example('dsu login <备注名>')
+    .example('dsu unbind <序号/名字>')
     .action(
       guard(async (session, argv) => {
         const left = cooldownLeft(session)
@@ -328,13 +443,42 @@ export function applyCommands(
           session.quote?.content,
         )
 
-        // 空格写法：dsu add <Key尾号>、dsu token <备注名>
-        const spaced = /^(add|bind|token)\b\s*(.*)$/i.exec(query)
+        // 空格写法：dsu add / dsu login / dsu unbind …… 走和 dsu.xxx 同一套处理
+        const spaced =
+          /^(add|bind|token|login|logout|unbind|list|remove|rm|del|account|all|key|refresh|whoami)\b\s*(.*)$/i.exec(
+            query,
+          )
         if (spaced) {
           const verb = spaced[1].toLowerCase()
           const rest = spaced[2].trim().split(/\s+/).filter(Boolean)
-          if (verb === 'token') return setToken(session, splitTokenArgs(rest))
-          return bindKey(session, splitBindArgs(rest), `dsu.${verb}`, false)
+          switch (verb) {
+            case 'token':
+            case 'login':
+              return setToken(session, splitTokenArgs(rest))
+            case 'logout':
+              return logoutCommand(session, rest.join(' '))
+            case 'add':
+            case 'bind':
+              return bindKey(session, splitBindArgs(rest), `dsu.${verb}`, false)
+            case 'unbind':
+              return rest.length ? removeKey(session, rest[0], true) : unbindAll(session)
+            case 'remove':
+            case 'rm':
+            case 'del':
+              return rest.length ? removeKey(session, rest[0]) : '用法：dsu.remove <序号或名字>'
+            case 'list':
+              return listKeys(session)
+            case 'account':
+              return accountCommand(session, rest)
+            case 'all':
+              return allCommand(session, rest[0])
+            case 'key':
+              return keyCommand(session, rest.join(' '))
+            case 'refresh':
+              return refreshCache(session)
+            case 'whoami':
+              return whoamiCommand(session)
+          }
         }
 
         const accounts = await service.userAccountList(key)
@@ -375,15 +519,36 @@ export function applyCommands(
     if (name && !name.includes(' ')) main.alias(name)
   }
 
+  const loginHandler = guard(async (session, argv) => {
+    return setToken(session, splitTokenArgs((argv.args ?? []) as Array<string | undefined>))
+  })
+
   ctx
-    .command('dsu.token [token:string] [name:string]', '设置当前账号的 userToken')
-    .usage(TOKEN_USAGE)
+    .command('dsu.login [token:string] [name:string]', '绑定 / 切换账号（userToken）')
+    .usage(LOGIN_USAGE)
+    .example('dsu.login <备注名>')
+    .example('dsu.login <userToken> <备注名>')
+    .action(loginHandler)
+
+  ctx
+    .command('dsu.token [token:string] [name:string]', '绑定账号（dsu.login 的旧名字）')
+    .usage('等同 dsu.login，保留给旧习惯。')
     .example('dsu.token <备注名>')
-    .example('dsu.token <userToken> <备注名>')
+    .action(loginHandler)
+
+  ctx
+    .command('dsu.logout [query:string]', '退出账号（连带这个账号下的 Key）')
+    .usage(
+      [
+        'dsu.logout 退出当前默认账号；dsu.logout <账号备注> 退出指定账号。',
+        '退出会把账号备注和它下面你绑定的 Key 一起删掉，默认账号自动切到剩下的账号。',
+        '只想删 Key、保留账号，用 dsu.unbind。',
+      ].join('\n'),
+    )
+    .example('dsu.logout')
+    .example('dsu.logout <账号备注>')
     .action(
-      guard(async (session, argv) => {
-        return setToken(session, splitTokenArgs((argv.args ?? []) as Array<string | undefined>))
-      }),
+      guard(async (session, argv) => logoutCommand(session, String(argv.args?.[0] ?? '').trim())),
     )
 
   const addHandler = (usage: string) =>
@@ -414,27 +579,7 @@ export function applyCommands(
     .example('dsu.account rename 账号1 主号')
     .action(
       guard(async (session, argv) => {
-        const action = String(argv.args?.[0] ?? '').trim().toLowerCase()
-        const key = userKey(session)!
-        if (action === 'list') {
-          const accounts = await service.accounts(key)
-          if (!accounts.length) return '你还没有添加账号。先发 dsu.token <备注名>。'
-          const bindings = await service.bindings(key)
-          const lines = ['账号列表：']
-          for (const account of accounts) {
-            const count = bindings.filter((item) => item.token === account.token).length
-            lines.push(`- ${account.name}：${maskToken(account.token)} · ${count} 个 Key`)
-          }
-          return lines.join('\n')
-        }
-        if (action === 'rename') {
-          const query = String(argv.args?.[1] ?? '').trim()
-          const name = String(argv.args?.[2] ?? '').trim()
-          if (!query || !name) return '用法：dsu.account rename <账号/备注> <新备注>'
-          const account = await service.renameAccount(key, query, name)
-          return `账号备注已改为：${account.name}`
-        }
-        return '用法：dsu.account list 或 dsu.account rename <账号/备注> <新备注>'
+        return accountCommand(session, (argv.args ?? []).map((value) => String(value ?? '')))
       }),
     )
 
@@ -446,29 +591,28 @@ export function applyCommands(
       guard(async (session, argv) => {
         const query = String(argv.args?.[0] ?? '').trim()
         if (!query) return '用法：dsu.remove <序号或名字>'
-        const left = cooldownLeft(session)
-        if (left > 0) return `操作太频繁啦，${left} 秒后再试。`
-        const binding = await service.removeBinding(userKey(session)!, query)
-        return `已移除：${binding.keyName}（${shortMask(binding.sensitiveId)}）`
+        return removeKey(session, query)
       }),
     )
 
   ctx
     .command('dsu.list', '查看自己绑定的所有 Key')
-    .action(
-      guard(async (session) => {
-        const bindings = await service.bindings(userKey(session)!)
-        if (!bindings.length) return '你还没有绑定 Key。发送 dsu.add <Key尾号> <备注名> 绑定一个。'
-        return showList(session, bindings)
-      }),
-    )
+    .action(guard(async (session) => listKeys(session)))
 
   ctx
-    .command('dsu.unbind', '解绑全部 Key')
+    .command('dsu.unbind [query:string]', '解绑 Key（账号保留）')
+    .usage(
+      [
+        'dsu.unbind <序号/名字> 解绑那一个 Key；dsu.unbind 不带参数解绑全部 Key。',
+        '账号不会被删，发 dsu 还能查账号总用量；要退出账号用 dsu.logout。',
+      ].join('\n'),
+    )
+    .example('dsu.unbind <序号/名字>')
+    .example('dsu.unbind')
     .action(
-      guard(async (session) => {
-        const count = await service.clear(userKey(session)!)
-        return count ? `已解绑全部 ${count} 个 Key。` : '你还没有绑定任何 Key。'
+      guard(async (session, argv) => {
+        const query = String(argv.args?.[0] ?? '').trim()
+        return query ? removeKey(session, query, true) : unbindAll(session)
       }),
     )
 
@@ -479,16 +623,7 @@ export function applyCommands(
     .example('dsu.all 2')
     .action(
       guard(async (session, argv) => {
-        const denied = requireAdmin(session)
-        if (denied) return denied
-        const left = cooldownLeft(session)
-        if (left > 0) return `查询太频繁啦，${left} 秒后再试。`
-        const page = Number(argv.args?.[0] ?? 1) || 1
-        const data = await service.allPage(page)
-        const options = renderOptions(session, config)
-        const markdown = useMarkdown(session)
-        const text = renderAllPage(data, options, markdown)
-        return markdown ? markdownReply(text) : text
+        return allCommand(session, argv.args?.[0] ? String(argv.args[0]) : undefined)
       }),
     )
 
@@ -498,56 +633,15 @@ export function applyCommands(
     .example('dsu.key 示例A')
     .action(
       guard(async (session, argv) => {
-        const denied = requireAdmin(session)
-        if (denied) return denied
-        const query = String(argv.args?.[0] ?? '').trim()
-        if (!query) return '用法：dsu.key <名字或 Key ID>'
-        const left = cooldownLeft(session)
-        if (left > 0) return `查询太频繁啦，${left} 秒后再试。`
-        const keys = await service.findKeys(query)
-        if (!keys.length) return `没有找到匹配「${query}」的 Key。`
-        if (keys.length > 1) {
-          const names = keys
-            .slice(0, 10)
-            .map((item) => `${item.key.name}（${shortMask(item.key.sensitiveId)}）`)
-            .join('、')
-          return `匹配到多个 Key：${names}\n请写完整一点的名字。`
-        }
-        const found = keys[0]
-        const report = found.binding
-          ? await service.report(found.binding, found.label)
-          : await service.reportKey(found.token, found.key, found.label)
-        return showReports(session, [report])
+        return keyCommand(session, String(argv.args?.[0] ?? '').trim())
       }),
     )
 
   ctx
     .command('dsu.refresh', '清空查询缓存（管理员）')
-    .action(
-      guard(async (session) => {
-        const denied = requireAdmin(session)
-        if (denied) return denied
-        service.clearCache()
-        return '缓存已清空，下次查询会重新拉取平台数据。'
-      }),
-    )
+    .action(guard(async (session) => refreshCache(session)))
 
   ctx
     .command('dsu.whoami', '查看自己的平台 ID 和绑定状态')
-    .action(
-      guard(async (session) => {
-        const key = userKey(session)!
-        const bindings = await service.bindings(key)
-        const accounts = new Set(bindings.map((item) => item.token)).size
-        const admin = isAdmin(session, config)
-        const token = await service.defaultToken(key)
-        return [
-          `平台：${session.platform}`,
-          `用户 ID：${session.userId}`,
-          `管理员：${admin ? '是' : '否'}`,
-          `绑定：${bindings.length} 个 Key · ${accounts} 个账号`,
-          `默认账号：${token ? maskToken(token) : '未设置'}`,
-        ].join('\n')
-      }),
-    )
+    .action(guard(async (session) => whoamiCommand(session)))
 }

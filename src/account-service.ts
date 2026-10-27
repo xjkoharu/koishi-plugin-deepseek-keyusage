@@ -346,12 +346,53 @@ export class AccountService {
     return matches[0]
   }
 
-  async clear(userId: string): Promise<number> {
+  /** 只解绑 Key，账号和默认 Token 保留。 */
+  async clearBindings(userId: string): Promise<number> {
     const rows = await this.bindings(userId)
     if (rows.length) await this.db.remove(BINDING_TABLE, { userId })
-    await this.db.remove(ACCOUNT_TABLE, { userId })
-    await this.db.remove(USER_TABLE, { userId })
     return rows.length
+  }
+
+  /**
+   * 退出一个账号：删掉账号备注和它下面的 Key，默认账号会自动切到剩下的账号。
+   * 不带 query 时退出当前默认账号。
+   */
+  async logoutAccount(
+    userId: string,
+    query?: string,
+  ): Promise<{ account: StoredAccount; keys: number; next?: StoredAccount }> {
+    const accounts = await this.accounts(userId)
+    if (!accounts.length) throw new BindError('你还没有绑定账号。发送 dsu.login <备注名> 添加一个。')
+
+    const label = query?.trim().toLowerCase()
+    let target: StoredAccount | undefined
+    if (label) {
+      target = accounts.find((item) => item.name.toLowerCase() === label)
+      if (!target) {
+        throw new BindError(`没有找到账号「${query}」。发送 dsu.account list 查看账号备注。`)
+      }
+    } else {
+      const token = await this.defaultToken(userId)
+      target = accounts.find((item) => item.token === token) ?? accounts[0]
+    }
+
+    const rows = await this.bindings(userId)
+    const keys = rows.filter((item) => item.token === target!.token).length
+    if (keys) await this.db.remove(BINDING_TABLE, { userId, token: target.token })
+    await this.db.remove(ACCOUNT_TABLE, { id: target.id })
+
+    const remaining = accounts.filter((item) => item.id !== target!.id)
+    const current = await this.defaultToken(userId)
+    let next: StoredAccount | undefined
+    if (current === target.token) {
+      if (remaining.length) {
+        next = remaining[0]
+        await this.db.set(USER_TABLE, { userId }, { token: next.token, updatedAt: Date.now() })
+      } else {
+        await this.db.remove(USER_TABLE, { userId })
+      }
+    }
+    return { account: target, keys, next }
   }
 
   /** 用户视角：优先用备注，没有备注的旧账号退回「账号N」。 */

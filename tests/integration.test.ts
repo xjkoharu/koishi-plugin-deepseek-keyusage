@@ -332,7 +332,12 @@ describe('plugin integration', () => {
     expect(text).not.toContain('名称：示例B')
     expect(text).toContain('账号：备用号')
     expect((await client.receive('dsu.unbind')).join('\n')).toContain('已解绑全部 2 个 Key')
-    expect((await client.receive('dsu')).join('\n')).toContain('你还没有绑定账号')
+
+    // 解绑 Key 不再连带删除账号：账号总用量还在
+    const after = (await client.receive('dsu')).join('\n')
+    expect(after).toContain('账号：备用号')
+    expect(after).toContain('还没有绑定 Key')
+    expect(after).not.toContain('API-1：')
   })
 
   it('sets a default token via chat and binds a key with it', async () => {
@@ -349,11 +354,41 @@ describe('plugin integration', () => {
     expect(text).toContain('sk-klmno**9012')
   })
 
-  it('binds by suffix with a remark that is not a token', async () => {
+  it('binds a suffix to the account named in the remark', async () => {
     const text = (await privateClient.receive('dsu.add 1234 主号')).join('\n')
     expect(text).toContain('添加成功：示例A')
     const list = (await privateClient.receive('dsu.account list')).join('\n')
+    expect(list).toContain('主号')
     expect(list).toContain('小号')
+  })
+
+  it('supports the spaced syntax for every subcommand', async () => {
+    expect((await client.receive('dsu list')).join('\n')).toContain('你绑定了 2 个 Key')
+    expect((await client.receive('dsu account list')).join('\n')).toContain('小号')
+    expect((await client.receive('dsu whoami')).join('\n')).toContain('平台：mock')
+    expect((await client.receive('dsu all')).join('\n')).toContain('只有管理员能用')
+
+    const unbound = (await client.receive('dsu unbind 示例A')).join('\n')
+    expect(unbound).toContain('已移除：示例A')
+    expect(unbound).toContain('dsu.unbind 不带参数')
+
+    expect((await client.receive('dsu remove 示例B')).join('\n')).toContain('已移除：示例B')
+    expect((await client.receive('dsu list')).join('\n')).toContain('你还没有绑定 Key')
+  })
+
+  it('routes spaced admin subcommands', async () => {
+    const text = (await admin.receive('dsu all 1')).join('\n')
+    expect(text).toContain('DeepSeek 账户总览（全部）')
+  })
+
+  it('logs out one account and keeps the others', async () => {
+    const text = (await client.receive('dsu logout')).join('\n')
+    expect(text).toContain('已退出账号：主号')
+    expect(text).toContain('默认账号已切换到：备用号')
+
+    const list = (await client.receive('dsu.account list')).join('\n')
+    expect(list).toContain('小号')
+    expect(list).toContain('备用号')
     expect(list).not.toContain('主号')
   })
 })
