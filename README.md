@@ -4,7 +4,6 @@
 [![downloads](https://img.shields.io/npm/dm/koishi-plugin-deepseek-keyusage)](https://www.npmjs.com/package/koishi-plugin-deepseek-keyusage)
 [![license](https://img.shields.io/npm/l/koishi-plugin-deepseek-keyusage)](LICENSE)
 [![koishi](https://img.shields.io/badge/koishi-%5E4.18-8a2be2)](https://koishi.chat)
-[![platform](https://img.shields.io/badge/platform-qq%20%7C%20qqguild%20%7C%20onebot-4a90d9)](https://koishi.chat)
 
 在 QQ 里查 DeepSeek 账号的余额、花费和 Token 用量。
 
